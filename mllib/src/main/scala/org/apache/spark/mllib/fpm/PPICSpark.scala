@@ -26,6 +26,8 @@ import oscar.cp.core.CPOutcome._
 import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.fpm.PrefixSpan.Postfix
 
+// Array implementation
+
 /**
  * Calculate all patterns of a projected database in local mode.
  *
@@ -37,7 +39,7 @@ import org.apache.spark.mllib.fpm.PrefixSpan.Postfix
  *                                 on <(1,2) 3> should output (1,2) 3; 1 3; 2 3 or just the
  *                                 last two ...
  */
-private[fpm] class SparkCPRunner(val prefix: Array[Int],
+private[fpm] class PPICSpark( val prefix: Array[Int],
                               val minSup: Long,
                               val minPatternLength: Int,
                               val maxPatternLength: Int,
@@ -57,7 +59,6 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
   def getLastItemFromPrefix(): Array[Int] = {
     prefix.drop(prefix.lastIndexOf(separator) + 1)
   }
-
   /**
    * Removes first element before first 0
    * Then count support for each item, so that unsupported item can be removed in the future.
@@ -65,22 +66,18 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
    * @return the inputed postfixes, desencapsulated and with the first elem removed
    */
   def preProcessPostfixes(postfixes: Array[Postfix]):
-    Array[scala.collection.mutable.Map[Int, ReversibleArrayStack[Int]]] = {
+    Array[Array[Int]] = {
 
     val preprocessed = scala.collection.mutable.ArrayBuffer
-      .empty[scala.collection.mutable.Map[Int, ReversibleArrayStack[Int]]]
+      .empty[Array[Int]]
     itemSupportCounter = collection.mutable.Map[Int, Int]()
 
     // Count support for each item
     val itemSupportedByThisSequence = collection.mutable.Map[Int, Int]()
     for (postfix <- postfixes) {
-      var firstZeroNotEncountered = true
 
       postfix.items.foreach(x => {
-        if (!outPutItemSetPermutation && firstZeroNotEncountered) {
-          if (x == separator) firstZeroNotEncountered = false
-        }
-        else itemSupportedByThisSequence.update(x, 1)
+        itemSupportedByThisSequence.update(x, 1)
       })
 
       itemSupportedByThisSequence.keysIterator.foreach(x =>
@@ -94,43 +91,32 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
     // Remove unsupported item
     for (postfix <- postfixes) {
       // Create SDB postfix
-      val curPostfix = scala.collection.mutable.Map.empty[Int, ReversibleArrayStack[Int]]
-      var lastItemWasSeparator = false
+      var lastItemWasEpsilon = false
+      val curPostfix = scala.collection.mutable.ArrayBuffer.empty[Int]
 
-      var lenSeq = 0
-      var pos = postfix.items.length - 1
+      var notSkippedFirst = true
       var addedSomethingElseThanZero = false
-      // Start position of the sequence, allow removal of first/ useless item
-      val startPos = if (outPutItemSetPermutation) 1
-                     else postfix.items.indexOf(separator)
-
-      // We build the sequence in reverse
-      while (pos >= startPos) {
-        val x = postfix.items(pos)
-
-        if (x == 0) {
-          if (!lastItemWasSeparator) {
-            lastItemWasSeparator = true
-            curPostfix.getOrElseUpdate(x, new ReversibleArrayStack[Int](solver)).push(pos)
-            lenSeq += 1
+      postfix.items.foreach(x => {
+        if (notSkippedFirst) notSkippedFirst = false
+        else if (x == 0) {
+          if (!lastItemWasEpsilon) {
+            lastItemWasEpsilon = true
+            curPostfix.append(x)
           }
         }
         else if (itemSupportCounter.getOrElse(x, 0) >= minSup) {
-          lastItemWasSeparator = false
+          lastItemWasEpsilon = false
           addedSomethingElseThanZero = true
-          curPostfix.getOrElseUpdate(x, new ReversibleArrayStack[Int](solver)).push(pos)
-          lenSeq += 1
+          curPostfix.append(x)
         }
-        pos -= 1
-      }
-      // If sequence is useful, add it
+      })
+      // If sequence is useful
       if (addedSomethingElseThanZero) {
         // Check if larger than current lenSeqMax
-        if (lenSeq > lenSeqMax) lenSeqMax = lenSeq
-        // Append and continue (We append an immutable version for optimisation)
-        preprocessed.append(curPostfix)
+        if (curPostfix.length > lenSeqMax) lenSeqMax = curPostfix.length
+        // Append and continue
+        preprocessed.append(curPostfix.toArray)
       }
-      // Else, let it's content dissapear into oblivion
     }
     preprocessed.toArray
   }
@@ -154,7 +140,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
 
     // TODO : actual min pattern length calculation
     val minLength = if (outPutItemSetPermutation) 2
-    else 3
+                    else 3
 
     val CPVariables = new Array[CPIntVar](maxLength)
     for (i <- CPVariables.indices) {
@@ -206,22 +192,15 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
       add(atMost(maxPatternLength, CPVariables, amongItem))
     }
 
-    val lastPrefixItemElems = if (outPutItemSetPermutation) getLastItemFromPrefix()
-                              else Array[Int]()
+    val lastPrefixItemElems = getLastItemFromPrefix()
 
     // PRINT
     /*
-    println("START")
     println(itemSet)
     println("Postfixes")
     postfixes.foreach(x => {x.items.foreach(x=> {print(x); print(" ")}); println()})
     println("sdb")
-    sdb.foreach(x => {x.keys.foreach( y => {
-      print(y +  " : ")
-      for (elem <- x.getOrElse(y, new ReversibleArrayStack[Int](solver))) {
-        print(elem)
-        print(" ")
-      }; println()}); println()})
+    sdb.foreach(x=> {x.foreach(x=> {print(x); print(" ")}); println()})
     println("itemSupportCounter")
     for(elem <- itemSet){
       println(elem + " : " + itemSupportCounter.getOrElse(elem, 0))
@@ -235,9 +214,15 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
     */
 
     // RUN
+
     val solutions = scala.collection.mutable.ArrayBuffer.empty[(Array[Int], Long)]
-    val c = new SparkCPOptimised(CPVariables, sdb, lastPrefixItemElems, minSup)
-    add(c)
+    val c = new sparkCP(CPVariables, sdb, lastPrefixItemElems, minSup)
+    try {
+      add(c)
+    } catch {
+      case noSol: oscar.cp.core.NoSolutionException => return Iterator()
+      case e: Exception => throw e
+    }
 
     this.solver.onSolution {
       val curSol = scala.collection.mutable.ArrayBuffer.empty[Int]
@@ -247,18 +232,18 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
       solutions += ((curSol.toArray, c.curPrefixSupport))
     }
 
+
     this.solver.search(binaryStatic(CPVariables))
     this.solver.start()
-
     solutions.toIterator
   }
 }
 
-class SparkCPOptimised(val P: Array[CPIntVar],
-              val SDB: Array[scala.collection.mutable.Map[Int, ReversibleArrayStack[Int]]],
+class sparkCP(val P: Array[CPIntVar],
+              val SDB: Array[Array[Int]],
               val prefixOfLastItem: Array[Int],
               val minsup : Long)
-  extends Constraint(P(0).store, "SPARK - CP") {
+  extends Constraint(P(0).store, "PPIC-SPARK") {
 
   // Define separator
   val separator = 0
@@ -322,6 +307,10 @@ class SparkCPOptimised(val P: Array[CPIntVar],
       }
     }
 
+    if (v > 0 && P(v-1).min == epsilon) {
+      return Failure
+    }
+
     while (v < P.length && P(v).isBound && P(v).min != epsilon) {
 
       // Project prefix
@@ -340,10 +329,20 @@ class SparkCPOptimised(val P: Array[CPIntVar],
               value != epsilon &&
               supportMap.getOrElse(value, 0) < minsup) {
 
-              if (P(v + 1).removeValue(value) == Failure) return Failure
+              P(v + 1).removeValue(value)
             }
           }
           supportMap.clear()
+          // IF v+1 == epsilon, enforce epsilon
+          if (P(v + 1).isBound && P(v + 1).value == epsilon) {
+            if (P(v).value == separator) {
+              enforceEpsilonFrom(v + 1)
+              return Success
+            }
+            else {
+              return Failure
+            }
+          }
         }
         // IF v != separator, v+1 != epsilon
         if (P(v).value != separator) {
@@ -351,12 +350,12 @@ class SparkCPOptimised(val P: Array[CPIntVar],
         }
         // If v == separator, v+1 != separator
         else {
-          if (P(v + 1).removeValue(separator) == Failure) return Failure
-          if (P(v + 1).isBoundTo(epsilon)) enforceEpsilonFrom(v + 1)
+          if (v + 1 == P.length) return Success
+          else {
+            if (P(v + 1).removeValue(separator) == Failure) return Failure
+          }
         }
       }
-
-      // println("removed : " + P.mkString(" "))
 
       // Search next item
       curPosInP.incr()
@@ -379,7 +378,7 @@ class SparkCPOptimised(val P: Array[CPIntVar],
 
   def getElemOfP(posInPrefix: Int): Int = {
     if (posInPrefix >= 0) P(posInPrefix).value
-    else if (prefixOfLastItem.length > -posInPrefix - 1) {
+    else if (prefixOfLastItem.length > -posInPrefix) {
       prefixOfLastItem(-(posInPrefix + prefixOfLastItem.length))
     }
     else 0
@@ -411,144 +410,57 @@ class SparkCPOptimised(val P: Array[CPIntVar],
       // Get current index for that sequence
       val index = posList(sequenceIndex)
       // Search cur sequence
-      val i = index.value
+      var i = index.value
       val curSeq = SDB(sequenceIndex)
+      // Search in current item first, either for the new item or the end of the item
+      while (i < curSeq.length &&
+        curSeq(i) != separator &&
+        curSeq(i) != soughtItem) i += 1
 
-      // Find start of next item
-      val separatorPos = curSeq.getOrElse(separator, new ReversibleArrayStack[Int](s))
-      while (!separatorPos.isEmpty && separatorPos.top < i) separatorPos.pop()
-
-      if (separatorPos.isEmpty) {
-        // Do nothing, all hope is lost for this sequence
-      }
-      else if (soughtItem == separator) {
-        // If separator empty => unsupported
-        // Else supported, move index of sequence
-        index.setValue(separatorPos.pop() + 1)
+      // IF found increase prefix support
+      if (i == curSeq.length) index.setValue(i)
+      else if (curSeq(i) == soughtItem) {
+        i += 1
+        index.setValue(i)
         curPrefixSupport += 1
       }
       else {
-        // Find next sought item, if in current item Success
-        // Else, search all items until found or unsupported
-        val soughtPos = curSeq.getOrElse(soughtItem, new ReversibleArrayStack[Int](s))
-        while (!soughtPos.isEmpty && soughtPos.top < i) soughtPos.pop()
+        // Else, answer is a subsequent item
+        // Search until the prefix is supporter or run out of seq
 
-        // If no pos, don't even look for it, it's unsupported
-        if (! soughtPos.isEmpty) {
-          // Else, search all items until found or unsupported
-          if (soughtPos.top < separatorPos.top) {
+        // Find current prefix boundaries
+        var posInP = v
+        while (posInP >= 0 && P(posInP).value != separator) posInP -= 1
+        if (posInP == -1) posInP = - prefixOfLastItem.length
+        else posInP += 1
 
-            index.setValue(soughtPos.pop() + 1)
-            curPrefixSupport += 1
-          }
-          else {
-            // Search from that item on, nothing before anyway
-            // Find current prefix boundaries
-            var posInP = v - 1
-            while (posInP >= 0 && P(posInP).value != separator) posInP -= 1
-            if (posInP == -1) posInP = -prefixOfLastItem.length
-            else posInP += 1
-
-            if (posInP == v) {
-              // No prefix to search for, just put pos to next item found
-              index.setValue(soughtPos.pop() + 1)
-              curPrefixSupport += 1
-            }
-            else {
-              // Find least present item in comming sequence
-              // Iter on that item, to shorten computation time
-              var minSize = soughtPos.size
-              var minSizePos = v - posInP
-              var curPosInPrefixArray = 0
-
-              val prefixSearcherArray = Array.fill[ReversibleArrayStack[Int]](v - posInP + 1) {
-                // Find itemMap
-                val item = getElemOfP(posInP)
-                val itemMap = curSeq.getOrElse(item, new ReversibleArrayStack[Int](s))
-                // Advance it as much as possible
-                while (!itemMap.isEmpty && itemMap.top < i) itemMap.pop()
-                // Find min size map
-                if (itemMap.size < minSize) {
-                  minSize = itemMap.size
-                  minSizePos = curPosInPrefixArray
-                }
-                // Iter on next
-                curPosInPrefixArray += 1
-                posInP += 1
-                itemMap
-              }
-
-              var isFound = false
-              while (!isFound && minSize > 0) {
-                // Get next pos and reduce minsize
-                val nextPosToCheck = prefixSearcherArray(minSizePos).top
-                minSize -= 1 // Elem removed at the end, if nothing found in iter
-                // If something is found, we remove it after changing the index pos
-                // Find LB, UB is next pos to check
-                var LB = separatorPos.top
-                while(separatorPos.top < nextPosToCheck) LB = separatorPos.pop()
-                // Check if, for all other item, there exist an element between LB and UB
-                isFound = true
-                var posInPrefixArray = 0
-                val savedPos = minSizePos
-                // Check pos lower than minSize first
-                while (isFound && posInPrefixArray < prefixSearcherArray.length) {
-
-                  if (posInPrefixArray != savedPos) {
-                    val prefixItem = prefixSearcherArray(posInPrefixArray)
-                    while (!prefixItem.isEmpty && prefixItem.top < LB) prefixItem.pop()
-                    // Determing if we should keep seaching in that item
-                    // If empty, no chance
-                    if (prefixItem.isEmpty) isFound = false
-                    // Else, IF next item larger than UB, drop it
-                    else if (prefixItem.top >= nextPosToCheck) isFound = false
-                    else prefixItem.pop()
-                    // Update reference item to minsize
-                    if (prefixItem.size < minSize) {
-                      minSize = prefixItem.size
-                      minSizePos = posInPrefixArray
-                    }
-                  }
-                  posInPrefixArray += 1
-                }
-                // If not found : Remove item, so we don't loop indefinitly
-                // If found, keep it so we can update index !
-                if (!isFound && !prefixSearcherArray(savedPos).isEmpty) {
-                  prefixSearcherArray(savedPos).pop()
-                }
-              }
-              if(isFound) {
-                // Prefix supported, last pos cannot be empty, so we simply take what's in it
-                index.setValue(prefixSearcherArray(prefixSearcherArray.length - 1).pop() + 1)
-                curPrefixSupport += 1
-              }
-              else {
-                // IF not foung, kill sequence
-                while (separatorPos.size > 1) separatorPos.pop()
-                index.setValue(separatorPos.pop() + 1)
-              }
-            }
-          }
+        // Search for prefix
+        var posInPrefix = posInP
+        while (i < curSeq.length && posInPrefix <= v) {
+          val currentItem = curSeq(i)
+          if (currentItem == separator) posInPrefix = posInP
+          else if (checkElemOfP(posInPrefix, currentItem)) posInPrefix += 1
+          i += 1
         }
-        else {
-          // IF soughtPos doesn't exist, kill sequence for future iter
-          while (separatorPos.size > 1) separatorPos.pop()
-          index.setValue(separatorPos.pop() + 1)
-        }
+
+        // Save new index
+        index.setValue(i)
+        if (i < curSeq.length) curPrefixSupport += 1
       }
       // Recalculate support map
-      if (soughtItem == separator && !separatorPos.isEmpty) {
-        curSeq.foreach{
-          case (key: Int, stack: ReversibleArrayStack[Int]) =>
-            // Clean uneeded elements
-            val i = index.value
-            while (!stack.isEmpty && stack.top < index.value) stack.pop()
-            // Add to support map if necessary
-            if (!stack.isEmpty) supportMap.update(key, supportMap.getOrElse(key, 0) + 1)
+      if (soughtItem == separator) {
+        while (i < curSeq.length) {
+          itemSupportedByThisSequence.update(curSeq(i), 1)
+          i += 1
         }
+        itemSupportedByThisSequence.keysIterator.foreach(x =>
+          supportMap.update(x, supportMap.getOrElse(x, 0) + 1)
+        )
+        itemSupportedByThisSequence.clear()
       }
     }
     // Return result
-    curPrefixSupport >= minsup
+    if (curPrefixSupport >= minsup) return true
+    else false
   }
 }

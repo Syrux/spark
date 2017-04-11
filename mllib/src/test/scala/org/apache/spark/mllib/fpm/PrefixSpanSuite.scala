@@ -407,6 +407,8 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
       actualValue: Array[(Array[Int], Long)]): Unit = {
     val expectedSet = expectedValue.map(x => (x._1.toSeq, x._2)).toSet
     val actualSet = actualValue.map(x => (x._1.toSeq, x._2)).toSet
+    println("ACTUAL   : " + actualSet.mkString(","))
+    println("EXPECTED : " + expectedSet.mkString(","))
     assert(expectedSet === actualSet)
   }
 }
