@@ -381,6 +381,15 @@ abstract class RDD[T: ClassTag](
   }
 
   /**
+   *  TOREMOVE
+   */
+  def inversedFlatMap[U: ClassTag](f: T => TraversableOnce[U]): RDD[U] = withScope {
+    val cleanF = sc.clean(f)
+    new MapPartitionsRDD[U, T](this, (context, pid, iter) =>
+      iter.toList.reverse.toIterator.flatMap(cleanF))
+  }
+
+  /**
    * Return a new RDD containing only the elements that satisfy a predicate.
    */
   def filter(f: T => Boolean): RDD[T] = withScope {
@@ -423,8 +432,7 @@ abstract class RDD[T: ClassTag](
    *
    * This results in a narrow dependency, e.g. if you go from 1000 partitions
    * to 100 partitions, there will not be a shuffle, instead each of the 100
-   * new partitions will claim 10 of the current partitions. If a larger number
-   * of partitions is requested, it will stay at the current number of partitions.
+   * new partitions will claim 10 of the current partitions.
    *
    * However, if you're doing a drastic coalesce, e.g. to numPartitions = 1,
    * this may result in your computation taking place on fewer nodes than
