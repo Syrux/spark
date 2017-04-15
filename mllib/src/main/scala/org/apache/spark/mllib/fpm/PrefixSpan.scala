@@ -433,8 +433,8 @@ object PrefixSpan extends Logging {
             // Determine whether to search in current item
             // This is determined through maxItemPerItemSet
             val shouldSearchInCurItem =
-              if (maxItemPerItemSet > 0 &&
-                prefix.items.length - prefix.items.lastIndexOf(0) - 1 >= maxItemPerItemSet) {
+              if (maxItemPerItemSet > 0 && (prefix.items.length -
+                (prefix.items.lastIndexOf(0) + 1)) >= maxItemPerItemSet) {
                 false
               }
               else true
@@ -482,7 +482,7 @@ object PrefixSpan extends Logging {
         bcSmallPrefixes.value.values.map { prefix =>
           (prefix.id, postfix.project(prefix).compressed)
         }.filter(_._2.nonEmpty)
-      }.groupByKey().inversedFlatMap { case (id, projPostfixes) =>
+      }.groupByKey().flatMap { case (id, projPostfixes) =>
         val prefix = bcSmallPrefixes.value(id)
         val newMaxPatternLength =
           if (maxPatternLength == 0) 0

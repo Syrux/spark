@@ -70,11 +70,11 @@ private[fpm] class LocalPrefixSpan(
       if (maxItemPerItemSet == 0) true
       else if (lastZeroIndex < 0) {
         // Special case for first item, since we don't have the prefix anymore
-        (spaceRemainingInCurrentItem - prefix.items.length) > 0
+        !(prefix.items.length >= spaceRemainingInCurrentItem)
       }
       else {
         // Apply normal computation
-        !(prefix.items.length - prefix.items.lastIndexOf(0) - 1 >= maxItemPerItemSet)
+        !((prefix.items.indexOf(0)) >= maxItemPerItemSet)
       }
     // Enforce maxItemPerItemSet through search for frequent item
     val counts = mutable.Map.empty[Int, Long].withDefaultValue(0)

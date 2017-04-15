@@ -381,15 +381,6 @@ abstract class RDD[T: ClassTag](
   }
 
   /**
-   *  TOREMOVE
-   */
-  def inversedFlatMap[U: ClassTag](f: T => TraversableOnce[U]): RDD[U] = withScope {
-    val cleanF = sc.clean(f)
-    new MapPartitionsRDD[U, T](this, (context, pid, iter) =>
-      iter.toList.reverse.toIterator.flatMap(cleanF))
-  }
-
-  /**
    * Return a new RDD containing only the elements that satisfy a predicate.
    */
   def filter(f: T => Boolean): RDD[T] = withScope {
