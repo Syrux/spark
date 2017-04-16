@@ -28,12 +28,11 @@ import org.apache.spark.internal.Logging
  * @param maxPatternLength max pattern length for a frequent pattern
  */
 private[fpm] class LocalPrefixSpan(
-                                    val minCount: Long,
-                                    val minPatternLength: Int,
-                                    val maxPatternLength: Int,
-                                    val maxItemPerItemSet: Int,
-                                    val spaceRemainingInCurrentItem: Int)
-  extends Logging with Serializable {
+    val minCount: Long,
+    val minPatternLength: Int,
+    val maxPatternLength: Int,
+    val maxItemPerItemSet: Int,
+    val spaceRemainingInCurrentItem: Int) extends Logging with Serializable {
 
   import PrefixSpan.Postfix
   import LocalPrefixSpan.ReversedPrefix
@@ -56,11 +55,10 @@ private[fpm] class LocalPrefixSpan(
    * @return an iterator of (prefix, count)
    */
   private def genFreqPatterns(
-                               prefix: ReversedPrefix,
-                               postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
+      prefix: ReversedPrefix,
+      postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
 
-    if ((maxPatternLength > 0 && maxPatternLength == prefix.length)
-      || postfixes.length < minCount) {
+    if ((maxPatternLength > 0 && maxPatternLength == prefix.length) || postfixes.length < minCount) {
       return Iterator.empty
     }
     // Determine whether to search in current item
@@ -68,12 +66,13 @@ private[fpm] class LocalPrefixSpan(
     val lastZeroIndex = prefix.items.lastIndexOf(0)
     val shouldSearchInCurItem =
       if (maxItemPerItemSet == 0) true
-      else if (prefix.hasMoreThanOneItemSet) {
-        !(prefix.curItemSetLength >= maxItemPerItemSet)
+      else if (lastZeroIndex < 0) {
+        // Special case for first item, since we don't have the prefix anymore
+        (spaceRemainingInCurrentItem - prefix.items.length) > 0
       }
       else {
-        // Special case for first itemSet, since we don't have the prefix anymore
-        !(prefix.curItemSetLength >= spaceRemainingInCurrentItem)
+        // Apply normal computation
+        !(prefix.items.length - prefix.items.lastIndexOf(0) - 1 >= maxItemPerItemSet)
       }
     // Enforce maxItemPerItemSet through search for frequent item
     val counts = mutable.Map.empty[Int, Long].withDefaultValue(0)
@@ -91,8 +90,8 @@ private[fpm] class LocalPrefixSpan(
       // Add pattern to sol if larger than minPatternLength
       if (newPrefix.length >= minPatternLength) {
         Iterator.single((newPrefix, count)) ++ {
-          val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
-          genFreqPatterns(newPrefix, projected)
+            val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
+            genFreqPatterns(newPrefix, projected)
         }
       }
       else {
@@ -110,19 +109,16 @@ private object LocalPrefixSpan {
    * @param items items in the prefix in reversed order
    * @param length length of the prefix, not counting delimiters
    */
-  class ReversedPrefix private (val items: List[Int],
-                                val length: Int,
-                                val hasMoreThanOneItemSet: Boolean,
-                                val curItemSetLength: Int) extends Serializable {
+  class ReversedPrefix private (val items: List[Int], val length: Int) extends Serializable {
     /**
      * Expands the prefix by one item.
      */
     def :+(item: Int): ReversedPrefix = {
       require(item != 0)
       if (item < 0) {
-        new ReversedPrefix(-item :: items, length + 1, hasMoreThanOneItemSet, curItemSetLength + 1)
+        new ReversedPrefix(-item :: items, length + 1)
       } else {
-        new ReversedPrefix(item :: 0 :: items, length + 1, true, 1)
+        new ReversedPrefix(item :: 0 :: items, length + 1)
       }
     }
 
@@ -134,6 +130,6 @@ private object LocalPrefixSpan {
 
   object ReversedPrefix {
     /** An empty prefix. */
-    val empty: ReversedPrefix = new ReversedPrefix(List.empty, 0, false, 0)
+    val empty: ReversedPrefix = new ReversedPrefix(List.empty, 0)
   }
 }
