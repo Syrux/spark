@@ -266,8 +266,8 @@ class PrefixSpan private (
         if (result.nonEmpty) {
           containsFreqItems = true
           allItems ++= result.sorted
-          allItems += 0
         }
+		allItems += 0
       }
       if (containsFreqItems) {
         Iterator.single(allItems.result())
@@ -433,8 +433,7 @@ object PrefixSpan extends Logging {
             // Determine whether to search in current item
             // This is determined through maxItemPerItemSet
             val shouldSearchInCurItem =
-              if (maxItemPerItemSet > 0 && (prefix.items.length -
-                (prefix.items.lastIndexOf(0) + 1)) >= maxItemPerItemSet) {
+              if (maxItemPerItemSet > 0 && prefix.curItemSetLength >= maxItemPerItemSet) {
                 false
               }
               else true
@@ -528,7 +527,8 @@ object PrefixSpan extends Logging {
    * @param length length of this prefix, not counting 0
    */
   private[fpm] class Prefix private (val items: Array[Int],
-                                     val length: Int) extends Serializable {
+                                     val length: Int,
+                                     val curItemSetLength: Int) extends Serializable {
 
     /** A unique id for this prefix. */
     val id: Int = Prefix.nextId
@@ -537,9 +537,9 @@ object PrefixSpan extends Logging {
     def :+(item: Int): Prefix = {
       require(item != 0)
       if (item < 0) {
-        new Prefix(items :+ -item, length + 1)
+        new Prefix(items :+ -item, length + 1, curItemSetLength + 1)
       } else {
-        new Prefix(items ++ Array(0, item), length + 1)
+        new Prefix(items ++ Array(0, item), length + 1, 1)
       }
     }
   }
@@ -552,10 +552,10 @@ object PrefixSpan extends Logging {
     private def nextId: Int = counter.incrementAndGet()
 
     /** Create a new prefix from received item. */
-    def create(item: Int): Prefix = new Prefix(Array(0, item), 1)
+    def create(item: Int): Prefix = new Prefix(Array(0, item), 1, 1)
 
     /** An empty [[Prefix]] instance. */
-    val empty: Prefix = new Prefix(Array.empty, 0)
+    val empty: Prefix = new Prefix(Array.empty, 0, 0)
   }
 
   /**
