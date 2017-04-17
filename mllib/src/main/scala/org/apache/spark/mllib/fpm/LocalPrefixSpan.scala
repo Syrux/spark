@@ -28,11 +28,12 @@ import org.apache.spark.internal.Logging
  * @param maxPatternLength max pattern length for a frequent pattern
  */
 private[fpm] class LocalPrefixSpan(
-    val minCount: Long,
-    val minPatternLength: Int,
-    val maxPatternLength: Int,
-    val maxItemPerItemSet: Int,
-    val spaceRemainingInCurrentItem: Int) extends Logging with Serializable {
+                                    val minCount: Long,
+                                    val minPatternLength: Int,
+                                    val maxPatternLength: Int,
+                                    val maxItemPerItemSet: Int,
+                                    val spaceRemainingInCurrentItem: Int)
+  extends Logging with Serializable {
 
   import PrefixSpan.Postfix
   import LocalPrefixSpan.ReversedPrefix
@@ -55,8 +56,8 @@ private[fpm] class LocalPrefixSpan(
    * @return an iterator of (prefix, count)
    */
   private def genFreqPatterns(
-      prefix: ReversedPrefix,
-      postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
+                               prefix: ReversedPrefix,
+                               postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
 
     if ((maxPatternLength > 0 && maxPatternLength == prefix.length)
       || postfixes.length < minCount) {
@@ -91,8 +92,8 @@ private[fpm] class LocalPrefixSpan(
       // Add pattern to sol if larger than minPatternLength
       if (newPrefix.length >= minPatternLength) {
         Iterator.single((newPrefix, count)) ++ {
-            val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
-            genFreqPatterns(newPrefix, projected)
+          val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
+          genFreqPatterns(newPrefix, projected)
         }
       }
       else {

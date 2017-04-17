@@ -371,7 +371,7 @@ object PrefixSpan extends Logging {
       logWarning("Input data is not cached.")
     }
 
-    val postfixes = data.map(items => new Postfix(items, !canUsePPIC))
+    val postfixes = data.map(items => new Postfix(items))
 
     // Local frequent patterns (prefixes) and their counts.
     val localFreqPatterns = mutable.ArrayBuffer.empty[(Array[Int], Long)]
@@ -389,7 +389,7 @@ object PrefixSpan extends Logging {
       // Use known start prefixes if available
       for ((item, count) <- freqItems) {
         // Create prefix from item
-        val prefix = Prefix.create(item)
+        val prefix = Prefix.create(item, Long.MaxValue)
         // Add to prefix to process
         largePrefixes += prefix.id -> prefix
         // If respect condition, add to solutions
@@ -451,7 +451,7 @@ object PrefixSpan extends Logging {
           .collect()
         val newLargePrefixes = mutable.Map.empty[Int, Prefix]
         freqPrefixes.foreach { case ((id, item), (count, projDBSize)) =>
-          val newPrefix = largePrefixes(id) :+ item
+          val newPrefix = largePrefixes(id) :+ (item, projDBSize)
           // If pattern longer than minPatternLength, add it to sol list
           if (newPrefix.length >= minPatternLength) {
             localFreqPatterns += ((newPrefix.items :+ 0, count))
@@ -478,11 +478,13 @@ object PrefixSpan extends Logging {
     if (numSmallPrefixes > 0) {
       // Switch to local processing.
       val bcSmallPrefixes = sc.broadcast(smallPrefixes)
+      val prefixesMappingOrder = sc.broadcast(
+        smallPrefixes.values.toArray.sortBy(-_.subProblemSize))
       val distributedFreqPattern = postfixes.flatMap { postfix =>
-        bcSmallPrefixes.value.values.map { prefix =>
+        prefixesMappingOrder.value.map { prefix =>
           (prefix.id, postfix.project(prefix).compressed)
         }.filter(_._2.nonEmpty)
-      }.groupByKey().flatMap { case (id, projPostfixes) =>
+      }.groupByKey().sortByKey(false).flatMap { case (id, projPostfixes) =>
         val prefix = bcSmallPrefixes.value(id)
         val newMaxPatternLength =
           if (maxPatternLength == 0) 0
@@ -527,18 +529,21 @@ object PrefixSpan extends Logging {
    * @param items items in this prefix, using the internal format
    * @param length length of this prefix, not counting 0
    */
-  private[fpm] class Prefix private (val items: Array[Int], val length: Int) extends Serializable {
+  private[fpm] class Prefix private (val items: Array[Int],
+                                     val length: Int,
+                                     val subProblemSize: Long) extends
+    Serializable {
 
     /** A unique id for this prefix. */
     val id: Int = Prefix.nextId
 
     /** Expands this prefix by the input item. */
-    def :+(item: Int): Prefix = {
+    def :+(item: Int, size: Long): Prefix = {
       require(item != 0)
       if (item < 0) {
-        new Prefix(items :+ -item, length + 1)
+        new Prefix(items :+ -item, length + 1, size)
       } else {
-        new Prefix(items ++ Array(0, item), length + 1)
+        new Prefix(items ++ Array(0, item), length + 1, size)
       }
     }
   }
@@ -551,10 +556,10 @@ object PrefixSpan extends Logging {
     private def nextId: Int = counter.incrementAndGet()
 
     /** Create a new prefix from received item. */
-    def create(item: Int): Prefix = new Prefix(Array(0, item), 1)
+    def create(item: Int, size: Long): Prefix = new Prefix(Array(0, item), 1, size)
 
     /** An empty [[Prefix]] instance. */
-    val empty: Prefix = new Prefix(Array.empty, 0)
+    val empty: Prefix = new Prefix(Array.empty, 0, Long.MaxValue)
   }
 
   /**
@@ -580,7 +585,6 @@ object PrefixSpan extends Logging {
    */
   private[fpm] class Postfix(
                               val items: Array[Int],
-                              val searchForMultiItemPatterns: Boolean,
                               val start: Int = 0,
                               val partialStarts: Array[Int] = Array.empty) extends Serializable {
 
@@ -678,7 +682,7 @@ object PrefixSpan extends Logging {
               newStart = i
               matched = true
             }
-            if (items(i) != 0 && searchForMultiItemPatterns) {
+            if (items(i) != 0) {
               newPartialStarts += i
             }
           }
@@ -696,14 +700,14 @@ object PrefixSpan extends Logging {
               newStart = i
               matched = true
             }
-            if (items(i + 1) != 0 && searchForMultiItemPatterns) {
+            if (items(i + 1) != 0) {
               newPartialStarts += i + 1
             }
           }
           i += 1
         }
       }
-      new Postfix(items, searchForMultiItemPatterns, newStart, newPartialStarts.result())
+      new Postfix(items, newStart, newPartialStarts.result())
     }
 
     /**
@@ -741,8 +745,7 @@ object PrefixSpan extends Logging {
      */
     def compressed: Postfix = {
       if (start > 0) {
-        new Postfix(items.slice(start, items.length), searchForMultiItemPatterns, 0,
-          partialStarts.map(_ - start))
+        new Postfix(items.slice(start, items.length), 0, partialStarts.map(_ - start))
       } else {
         this
       }
@@ -774,7 +777,7 @@ object PrefixSpan extends Logging {
  */
 @Since("1.5.0")
 class PrefixSpanModel[Item] @Since("1.5.0") (
-  @Since("1.5.0") val freqSequences: RDD[PrefixSpan.FreqSequence[Item]])
+    @Since("1.5.0") val freqSequences: RDD[PrefixSpan.FreqSequence[Item]])
   extends Saveable with Serializable {
 
   /**
