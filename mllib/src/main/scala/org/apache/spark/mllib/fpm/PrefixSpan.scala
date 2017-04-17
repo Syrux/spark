@@ -484,7 +484,7 @@ object PrefixSpan extends Logging {
         prefixesMappingOrder.value.map { prefix =>
           (prefix.id, postfix.project(prefix).compressed)
         }.filter(_._2.nonEmpty)
-      }.groupByKey().sortByKey(false).flatMap { case (id, projPostfixes) =>
+      }.groupByKey().flatMap { case (id, projPostfixes) =>
         val prefix = bcSmallPrefixes.value(id)
         val newMaxPatternLength =
           if (maxPatternLength == 0) 0
