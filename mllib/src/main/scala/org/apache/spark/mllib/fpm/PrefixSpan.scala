@@ -371,7 +371,7 @@ object PrefixSpan extends Logging {
       logWarning("Input data is not cached.")
     }
 
-    val postfixes = data.map(items => new Postfix(items))
+    val postfixes = data.map(items => new Postfix(items, !canUsePPIC))
 
     // Local frequent patterns (prefixes) and their counts.
     val localFreqPatterns = mutable.ArrayBuffer.empty[(Array[Int], Long)]
@@ -479,7 +479,7 @@ object PrefixSpan extends Logging {
       // Switch to local processing.
       val bcSmallPrefixes = sc.broadcast(smallPrefixes)
       val distributedFreqPattern = postfixes.flatMap { postfix =>
-        bcSmallPrefixes.value.values.toList.reverse.map { prefix =>
+        bcSmallPrefixes.value.values.map { prefix =>
           (prefix.id, postfix.project(prefix).compressed)
         }.filter(_._2.nonEmpty)
       }.groupByKey().flatMap { case (id, projPostfixes) =>
@@ -580,6 +580,7 @@ object PrefixSpan extends Logging {
    */
   private[fpm] class Postfix(
                               val items: Array[Int],
+                              val searchForMultiItemPatterns: Boolean,
                               val start: Int = 0,
                               val partialStarts: Array[Int] = Array.empty) extends Serializable {
 
@@ -677,7 +678,7 @@ object PrefixSpan extends Logging {
               newStart = i
               matched = true
             }
-            if (items(i) != 0) {
+            if (items(i) != 0 && searchForMultiItemPatterns) {
               newPartialStarts += i
             }
           }
@@ -695,14 +696,14 @@ object PrefixSpan extends Logging {
               newStart = i
               matched = true
             }
-            if (items(i + 1) != 0) {
+            if (items(i + 1) != 0 && searchForMultiItemPatterns) {
               newPartialStarts += i + 1
             }
           }
           i += 1
         }
       }
-      new Postfix(items, newStart, newPartialStarts.result())
+      new Postfix(items, searchForMultiItemPatterns, newStart, newPartialStarts.result())
     }
 
     /**
@@ -740,7 +741,8 @@ object PrefixSpan extends Logging {
      */
     def compressed: Postfix = {
       if (start > 0) {
-        new Postfix(items.slice(start, items.length), 0, partialStarts.map(_ - start))
+        new Postfix(items.slice(start, items.length), searchForMultiItemPatterns, 0,
+          partialStarts.map(_ - start))
       } else {
         this
       }
