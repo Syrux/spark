@@ -28,13 +28,8 @@ import org.apache.spark.internal.Logging
  * @param maxPatternLength max pattern length for a frequent pattern
  */
 private[fpm] class LocalPrefixSpan(
-                                    val minCount: Long,
-                                    val minPatternLength: Int,
-                                    val maxPatternLength: Int,
-                                    val maxItemPerItemSet: Int,
-                                    val spaceRemainingInCurrentItem: Int)
-  extends Logging with Serializable {
-
+    val minCount: Long,
+    val maxPatternLength: Int) extends Logging with Serializable {
   import PrefixSpan.Postfix
   import LocalPrefixSpan.ReversedPrefix
 
@@ -56,30 +51,15 @@ private[fpm] class LocalPrefixSpan(
    * @return an iterator of (prefix, count)
    */
   private def genFreqPatterns(
-                               prefix: ReversedPrefix,
-                               postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
-
-    if ((maxPatternLength > 0 && maxPatternLength == prefix.length)
-      || postfixes.length < minCount) {
+      prefix: ReversedPrefix,
+      postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
+    if (maxPatternLength == prefix.length || postfixes.length < minCount) {
       return Iterator.empty
     }
-    // Determine whether to search in current item
-    // This is determined through maxItemPerItemSet
-    val lastZeroIndex = prefix.items.lastIndexOf(0)
-    val shouldSearchInCurItem =
-      if (maxItemPerItemSet == 0) true
-      else if (lastZeroIndex < 0) {
-        // Special case for first item, since we don't have the prefix anymore
-        (spaceRemainingInCurrentItem - prefix.items.length) > 0
-      }
-      else {
-        // Apply normal computation
-        !(prefix.items.length - prefix.items.lastIndexOf(0) - 1 >= maxItemPerItemSet)
-      }
-    // Enforce maxItemPerItemSet through search for frequent item
+    // find frequent items
     val counts = mutable.Map.empty[Int, Long].withDefaultValue(0)
     postfixes.foreach { postfix =>
-      postfix.genPrefixItems(shouldSearchInCurItem).foreach { case (x, _) =>
+      postfix.genPrefixItems.foreach { case (x, _) =>
         counts(x) += 1L
       }
     }
@@ -89,14 +69,7 @@ private[fpm] class LocalPrefixSpan(
     // project and recursively call genFreqPatterns
     freqItems.toIterator.flatMap { case (item, count) =>
       val newPrefix = prefix :+ item
-      // Add pattern to sol if larger than minPatternLength
-      if (newPrefix.length >= minPatternLength) {
-        Iterator.single((newPrefix, count)) ++ {
-          val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
-          genFreqPatterns(newPrefix, projected)
-        }
-      }
-      else {
+      Iterator.single((newPrefix, count)) ++ {
         val projected = postfixes.map(_.project(item)).filter(_.nonEmpty)
         genFreqPatterns(newPrefix, projected)
       }
