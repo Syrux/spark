@@ -332,17 +332,8 @@ object PrefixSpan extends Logging {
       }.groupByKey().flatMap { case (id, projPostfixes) =>
         val prefix = bcSmallPrefixes.value(id)
 
-        /*
         val localPrefixSpan = new PPICSpark(prefix.items, minCount, 0,
           maxPatternLength - prefix.length, !canUsePPIC)
-        localPrefixSpan.run(projPostfixes.toArray).map { case (pattern, count) =>
-          (prefix.items ++ pattern, count)
-        }
-        */
-
-        val localPrefixSpan = new LocalPrefixSpan(minCount, maxPatternLength - prefix.length)
-        // TODO: We collect projected postfixes into memory. We should also compare the performance
-        // TODO: of keeping them on shuffle files.
         localPrefixSpan.run(projPostfixes.toArray).map { case (pattern, count) =>
           (prefix.items ++ pattern, count)
         }
