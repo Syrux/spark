@@ -90,8 +90,8 @@ private[fpm] class PPICSpark( val prefix: Array[Int],
    * @return the inputed postfixes, desencapsulated and with the first elem removed
    */
   def preProcessPostfixes(postfixes: Array[Postfix]):
-    (Array[Array[Int]], Array[ReversibleArrayStack[Set[Int]]],
-      Array[Array[Int]], Array[Array[Int]]) = {
+  (Array[Array[Int]], Array[ReversibleArrayStack[Set[Int]]],
+    Array[Array[Int]], Array[Array[Int]]) = {
 
     val preprocessedSequence = scala.collection.mutable.ArrayBuilder
       .make[Array[Int]]
@@ -183,7 +183,7 @@ private[fpm] class PPICSpark( val prefix: Array[Int],
   def initCPVariables(maxPatternLength: Int,
                       itemSet : scala.collection.Set[Int],
                       isMultiItemPattern: Boolean):
-    Array[CPIntVar] = {
+  Array[CPIntVar] = {
 
     val nonZeroSet = itemSet -- Set(separator)
     val nonZeroEpsilonSet = nonZeroSet ++ Set(epsilon)
@@ -199,7 +199,7 @@ private[fpm] class PPICSpark( val prefix: Array[Int],
 
     // TODO : actual min pattern length calculation
     val minLength =
-      if (!isMultiItemPattern) 3
+      if (!isMultiItemPattern) 1
       else 2
 
     val CPVariables = new Array[CPIntVar](maxLength)
@@ -540,6 +540,11 @@ class sparkCP(val P: Array[CPIntVar],
               newPartialProj += checker + 1
               shouldUpdateItemSupport = true
             }
+            checker += 1
+          }
+          // Add to itemSupported by sequence until end of cur item
+          while (curSeq(checker) != separator) {
+            itemSupportedByThisSequence.update(curSeq(checker), 1)
             checker += 1
           }
           // Update support map
