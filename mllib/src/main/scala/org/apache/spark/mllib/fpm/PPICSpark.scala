@@ -411,17 +411,15 @@ class sparkCP(val P: Array[CPIntVar],
       // Clean next V
       if(v < P.length - 1) {
         // Remove unsupported item in next V
-        if (!supportMap.isEmpty) {
-          for (value <- P(v + 1)) {
-            if (value != separator &&
-              value != epsilon &&
-              supportMap.getOrElse(value, 0) < minsup) {
+        for (value <- P(v + 1)) {
+          if (value != separator &&
+            value != epsilon &&
+            supportMap.getOrElse(value, 0) < minsup) {
 
-              if (P(v + 1).removeValue(value) == Failure) return Failure
-            }
+            if (P(v + 1).removeValue(value) == Failure) return Failure
           }
-          supportMap.clear()
         }
+        supportMap.clear()
         // IF v != separator, v+1 != epsilon
         if (P(v).value != separator) {
           if (P(v + 1).removeValue(epsilon) == Failure) return Failure
@@ -516,6 +514,7 @@ class sparkCP(val P: Array[CPIntVar],
         for (item <- itemSupportedByThisSequence.keys) {
           supportMap.update(item, supportMap.getOrElse(item, 0) + 1)
         }
+        // To Make sure map is cleaned, even if no item found in any sequence
         itemSupportedByThisSequence.clear()
       }
       else if (checkElemOfP(v - 1, separator)) {
