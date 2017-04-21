@@ -346,6 +346,7 @@ class sparkCP(val P: Array[CPIntVar],
   private[this] val posList = Array.fill[ReversibleInt](SDB.length)(new ReversibleInt(s, 0))
 
   // Map containing unsupported elements
+  private[this] val itemSupportedByThisSequence = collection.mutable.Map[Int, Int]()
   private[this] val supportMap = scala.collection.mutable.Map.empty[Int, Int]
 
   /**
@@ -404,7 +405,7 @@ class sparkCP(val P: Array[CPIntVar],
         // println()
         return Failure
       }
-      // println("SUCESS : " + P.mkString(","))
+      // println("SUCCESS : " + P.mkString(","))
       // println()
 
       // Clean next V
@@ -506,9 +507,16 @@ class sparkCP(val P: Array[CPIntVar],
         // Update partial Proj
         partialProjection(sequenceIndex).push(Set.empty[Int])
         // Update item support
-        for (item <- lastPos.indices) {
-          if (lastPos(item) >= i) supportMap.update(item, supportMap.getOrElse(item, 0) + 1)
+        var checker = i + 1
+        while (checker < curSeq.length) {
+          itemSupportedByThisSequence.update(curSeq(checker), 1)
+          checker += 1
         }
+        // Update support map
+        for (item <- itemSupportedByThisSequence.keys) {
+          supportMap.update(item, supportMap.getOrElse(item, 0) + 1)
+        }
+        itemSupportedByThisSequence.clear()
       }
       else if (checkElemOfP(v - 1, separator)) {
         // If last elem was a separator, find projection anywhere
@@ -526,7 +534,7 @@ class sparkCP(val P: Array[CPIntVar],
           while (checker < lastPos(soughtItem)) {
             if (shouldUpdateItemSupport) {
               if (curSeq(checker) == separator) shouldUpdateItemSupport = false
-              else supportMap.update(curSeq(checker), supportMap.getOrElse(curSeq(checker), 0) + 1)
+              else itemSupportedByThisSequence.update(curSeq(checker), 1)
             }
             if (curSeq(checker) == soughtItem && curSeq(checker + 1) != separator) {
               // Partial proj found, add it
@@ -535,6 +543,11 @@ class sparkCP(val P: Array[CPIntVar],
             }
             checker += 1
           }
+          // Update support map
+          for (item <- itemSupportedByThisSequence.keys) {
+            supportMap.update(item, supportMap.getOrElse(item, 0) + 1)
+          }
+          itemSupportedByThisSequence.clear()
         }
         partialProjection(sequenceIndex).push(newPartialProj.toSet)
         // Don't update item support
@@ -559,12 +572,17 @@ class sparkCP(val P: Array[CPIntVar],
               newPartialProj += (checker)
               // Update support map
               while (curSeq(checker) != separator) {
-                supportMap.update(curSeq(checker), supportMap.getOrElse(curSeq(checker), 0) + 1)
+                itemSupportedByThisSequence.update(curSeq(checker), 1)
                 checker += 1
               }
             }
           }
         }
+        // Update support map
+        for (item <- itemSupportedByThisSequence.keys) {
+          supportMap.update(item, supportMap.getOrElse(item, 0) + 1)
+        }
+        itemSupportedByThisSequence.clear()
         // Update partial proj
         partialProjection(sequenceIndex).push(newPartialProj.toSet)
         // IF not supported, put i to end of sequence
@@ -573,7 +591,7 @@ class sparkCP(val P: Array[CPIntVar],
       }
 
       // Update start position in sequence
-      if (i == curSeq.length) {
+      if (i >= curSeq.length) {
         index.setValue(i)
       }
       else {
