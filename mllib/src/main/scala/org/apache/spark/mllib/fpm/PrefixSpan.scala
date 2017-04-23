@@ -528,7 +528,9 @@ object PrefixSpan extends Logging {
     // Find frequent items
     for (postfix <- postfixes) {
 
-      var lastItemWasZero = false
+      var lastItemWasZero =
+        if (prefix.items.length >= 2) prefix.items(prefix.items.length - 2) == 0
+        else false
       // Find items in current sequence
       for (i <- Range(0, postfix.items.length)) {
         val x = postfix.items(i)
@@ -547,17 +549,16 @@ object PrefixSpan extends Logging {
       itemSupportedByThisSequence.clear()
     }
 
-    // If PPIC can be used, return since it will clean again at the start of PPIC
     if (canUsePPIC) {
       return (postfixes.toArray, true)
     }
     canUsePPIC = true
 
     // Clean sequences
+    var lenSeqMax = 0
     val cleanedSequences = mutable.ArrayBuilder.make[Postfix]
     for (postfix <- postfixes) {
       // Init
-      var isNotEmpty = false
       var lastItemAdded = 0
       var partialProjectionAddedSinceLastZero = false
       val curSeq = mutable.ArrayBuilder.make[Int]
@@ -569,8 +570,6 @@ object PrefixSpan extends Logging {
         curSeq += postfix.items(0) // Always take first item (whether 0 or not, supported or not)
         if(postfix.items(0) != 0) {
           numberOfItemPerItemSetCounter += 1
-          isNotEmpty = true
-          canUsePPIC = false
         }
         lastItemAdded += 1
         // Correct partial start
@@ -602,7 +601,6 @@ object PrefixSpan extends Logging {
         else if (frequentItems.getOrElse(item, 0L) >= minSupport) {
           curSeq += item
           lastItemAdded += 1
-          isNotEmpty = true
           numberOfItemPerItemSetCounter += 1
         }
         // Correct partial start
@@ -612,11 +610,13 @@ object PrefixSpan extends Logging {
         }
       }
       // Add sequence if worthy of being added
-      if (isNotEmpty) {
+      if (lastItemAdded > 1) { // Must be at least x 0 to be a sequence
+        if (lastItemAdded > lenSeqMax) lenSeqMax = lastItemAdded
         cleanedSequences += new Postfix(curSeq.result(), 0, newPartialStarts.toArray)
       }
     }
     // Return
+    if (lenSeqMax < 4) canUsePPIC = false // must be x 0 y 0 at least
     (cleanedSequences.result(), canUsePPIC)
   }
 
