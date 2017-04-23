@@ -232,12 +232,14 @@ class PrefixSpan private (
         if (itemset.size > 1) singleItemDataset = false
         uniqItems ++= itemset
       }
-      uniqItems.toIterator.map((_, (singleItemDataset, 1L)))
+      uniqItems.toIterator.map((_, (!singleItemDataset, 1L)))
     }.reduceByKey((accum, cur) => (accum._1 || cur._1, accum._2 + cur._2))
       .filter { case (_, (dataSetType, count)) =>
         count >= minCount
       }.collect()
     val freqItems = freqItemAndCounts.sortBy(-_._2._2).map(_._1)
+
+
     val isDataAMultiItemDataset = freqItemAndCounts.map(_._2._1).reduce(_ || _)
     logInfo(s"number of frequent items: ${freqItems.length}")
 
@@ -273,6 +275,11 @@ class PrefixSpan private (
       }
     }.persist(StorageLevel.MEMORY_AND_DISK)
 
+    /*
+    val results = genFreqPatterns(dataInternalRepr, isDataAMultiItemDataset,
+      frequentItemsAndCounts.map(x => (x._1, x._2._2)), minCount, maxPatternLength,
+      minPatternLength, maxItemPerItemSet, subProblemLimit, maxLocalProjDBSize)
+      */
     val results = genFreqPatterns(dataInternalRepr, isDataAMultiItemDataset,
       frequentItemsAndCounts.map(x => (x._1, x._2._2)), minCount, maxPatternLength,
       minPatternLength, maxItemPerItemSet, subProblemLimit, maxLocalProjDBSize)
