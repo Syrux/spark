@@ -48,7 +48,7 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
     val rdd = sc.parallelize(sequences, 2).cache()
 
     val result1 = PrefixSpan.genFreqPatterns(
-      rdd, minCount = 2L, maxPatternLength = 50, maxLocalProjDBSize = 16L, canUsePPIC = true)
+      rdd, minCount = 2L, maxPatternLength = 50, maxLocalProjDBSize = 16L)
     val expectedValue1 = Array(
       (Array(0, 1, 0), 4L),
       (Array(0, 1, 0, 3, 0), 2L),
@@ -73,7 +73,7 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
     compareInternalResults(expectedValue1, result1.collect())
 
     val result2 = PrefixSpan.genFreqPatterns(
-      rdd, minCount = 3, maxPatternLength = 50, maxLocalProjDBSize = 32L, canUsePPIC = true)
+      rdd, minCount = 3, maxPatternLength = 50, maxLocalProjDBSize = 32L)
     val expectedValue2 = Array(
       (Array(0, 1, 0), 4L),
       (Array(0, 3, 0), 5L),
@@ -84,7 +84,7 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
     compareInternalResults(expectedValue2, result2.collect())
 
     val result3 = PrefixSpan.genFreqPatterns(
-      rdd, minCount = 2, maxPatternLength = 2, maxLocalProjDBSize = 32L, canUsePPIC = true)
+      rdd, minCount = 2, maxPatternLength = 2, maxLocalProjDBSize = 32L)
     val expectedValue3 = Array(
       (Array(0, 1, 0), 4L),
       (Array(0, 1, 0, 3, 0), 2L),
@@ -399,8 +399,6 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
     val actualSet = actualValue.map { x =>
       (x.sequence.map(_.toSet).toSeq, x.freq)
     }.toSet
-    // println("ACTUAL   : " + actualSet.mkString(","))
-    // println("EXPECTED : " + expectedSet.mkString(","))
     assert(expectedSet === actualSet)
   }
 
@@ -409,8 +407,6 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
       actualValue: Array[(Array[Int], Long)]): Unit = {
     val expectedSet = expectedValue.map(x => (x._1.toSeq, x._2)).toSet
     val actualSet = actualValue.map(x => (x._1.toSeq, x._2)).toSet
-    // println("ACTUAL   : " + actualSet.mkString(","))
-    // println("EXPECTED : " + expectedSet.mkString(","))
     assert(expectedSet === actualSet)
   }
 }
