@@ -400,7 +400,39 @@ class PrefixSpanSuite extends SparkFunSuite with MLlibTestSparkContext {
     compareResults(expected, model.freqSequences.collect())
   }
 
-  test("model save/load") {
+  test("model save/load single item patterns") {
+    val sequences = Seq(
+      Array(Array(1), Array(3), Array(4), Array(5)),
+      Array(Array(2), Array(3), Array(1)),
+      Array(Array(2), Array(4), Array(1)),
+      Array(Array(3), Array(1), Array(3), Array(4), Array(5)),
+      Array(Array(3), Array(4), Array(4), Array(3)),
+      Array(Array(6), Array(5), Array(3)))
+    val rdd = sc.parallelize(sequences, 2).cache()
+
+    val prefixSpan = new PrefixSpan()
+      .setMinSupport(0.3)
+      .setMaxPatternLength(5)
+    val model = prefixSpan.run(rdd)
+
+    val tempDir = Utils.createTempDir()
+    val path = tempDir.toURI.toString
+    try {
+      model.save(sc, path)
+      val newModel = PrefixSpanModel.load(sc, path)
+      val originalSet = model.freqSequences.collect().map { x =>
+        (x.sequence.map(_.toSet).toSeq, x.freq)
+      }.toSet
+      val newSet = newModel.freqSequences.collect().map { x =>
+        (x.sequence.map(_.toSet).toSeq, x.freq)
+      }.toSet
+      assert(originalSet === newSet)
+    } finally {
+      Utils.deleteRecursively(tempDir)
+    }
+  }
+
+  test("model save/load multi-items pattern") {
     val sequences = Seq(
       Array(Array(1, 2), Array(3)),
       Array(Array(1), Array(3, 2), Array(1, 2)),

@@ -21,6 +21,8 @@ import scala.collection.mutable
 
 import org.apache.spark.internal.Logging
 
+import PrefixSpan.Sequence
+
 /**
  * Calculate all patterns of a projected database in local mode.
  *
@@ -43,7 +45,7 @@ private[fpm] class LocalPrefixSpan(
    * @param postfixes an array of postfixes
    * @return an iterator of (frequent pattern, count)
    */
-  def run(postfixes: Array[Postfix]): Iterator[(Array[Int], Long)] = {
+  def run(postfixes: Array[Sequence]): Iterator[(Array[Int], Long)] = {
     genFreqPatterns(ReversedPrefix.empty, postfixes).map { case (prefix, count) =>
       (prefix.toSequence, count)
     }
@@ -57,7 +59,7 @@ private[fpm] class LocalPrefixSpan(
    */
   private def genFreqPatterns(
                                prefix: ReversedPrefix,
-                               postfixes: Array[Postfix]): Iterator[(ReversedPrefix, Long)] = {
+                               postfixes: Array[Sequence]): Iterator[(ReversedPrefix, Long)] = {
 
     if ((maxPatternLength > 0 && maxPatternLength == prefix.length)
       || postfixes.length < minCount) {

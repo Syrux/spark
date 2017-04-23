@@ -227,15 +227,18 @@ class PrefixSpan private (
     // Find frequent items.
     val freqItemAndCounts = data.flatMap { itemsets =>
       val uniqItems = mutable.Set.empty[Item]
-      itemsets.foreach { _.foreach { item =>
-        uniqItems += item
-      }}
-      uniqItems.toIterator.map((_, 1L))
-    }.reduceByKey(_ + _)
-      .filter { case (_, count) =>
+      var singleItemDataset = true
+      itemsets.foreach { itemset =>
+        if (itemset.size > 1) singleItemDataset = false
+        uniqItems ++= itemset
+      }
+      uniqItems.toIterator.map((_, (singleItemDataset, 1L)))
+    }.reduceByKey((accum, cur) => (accum._1 || cur._1, accum._2 + cur._2))
+      .filter { case (_, (dataSetType, count)) =>
         count >= minCount
       }.collect()
-    val freqItems = freqItemAndCounts.sortBy(-_._2).map(_._1)
+    val freqItems = freqItemAndCounts.sortBy(-_._2._2).map(_._1)
+    val isDataAMultiItemDataset = freqItemAndCounts.map(_._2._1).reduce(_ || _)
     logInfo(s"number of frequent items: ${freqItems.length}")
 
     // Convert freqItemArray
@@ -243,10 +246,12 @@ class PrefixSpan private (
     val frequentItemsAndCounts = freqItemAndCounts.map(x => (itemToInt(x._1) + 1, x._2) )
 
     // Keep only frequent items from input sequences and convert them to internal storage.
+    // If multi-item dataset => Keep zero separator
+    // If single-item => no separator at all
     val dataInternalRepr = data.flatMap { itemsets =>
       val allItems = mutable.ArrayBuilder.make[Int]
       var containsFreqItems = false
-      allItems += 0
+      if (isDataAMultiItemDataset) allItems += 0
       itemsets.foreach { itemsets =>
         val items = mutable.ArrayBuilder.make[Int]
         itemsets.foreach { item =>
@@ -258,7 +263,7 @@ class PrefixSpan private (
         if (result.nonEmpty) {
           containsFreqItems = true
           allItems ++= result.sorted
-          allItems += 0
+          if (isDataAMultiItemDataset) allItems += 0
         }
       }
       if (containsFreqItems) {
@@ -268,8 +273,9 @@ class PrefixSpan private (
       }
     }.persist(StorageLevel.MEMORY_AND_DISK)
 
-    val results = genFreqPatterns(dataInternalRepr, frequentItemsAndCounts, minCount,
-      maxPatternLength, minPatternLength, maxItemPerItemSet, subProblemLimit, maxLocalProjDBSize)
+    val results = genFreqPatterns(dataInternalRepr, isDataAMultiItemDataset,
+      frequentItemsAndCounts.map(x => (x._1, x._2._2)), minCount, maxPatternLength,
+      minPatternLength, maxItemPerItemSet, subProblemLimit, maxLocalProjDBSize)
 
     def toPublicRepr(pattern: Array[Int]): Array[Array[Item]] = {
       val sequenceBuilder = mutable.ArrayBuilder.make[Array[Item]]
@@ -331,7 +337,7 @@ object PrefixSpan extends Logging {
                                     maxPatternLength: Int,
                                     maxLocalProjDBSize: Long): RDD[(Array[Int], Long)] = {
 
-    genFreqPatterns(data, Array(), minCount, maxPatternLength, 0,
+    genFreqPatterns(data, true, Array(), minCount, maxPatternLength, 0,
       0, 0, maxLocalProjDBSize)
   }
 
@@ -342,12 +348,13 @@ object PrefixSpan extends Logging {
                                     minPatternLength: Int,
                                     maxLocalProjDBSize: Long): RDD[(Array[Int], Long)] = {
 
-    genFreqPatterns(data, Array(), minCount, maxPatternLength, minPatternLength,
+    genFreqPatterns(data, true, Array(), minCount, maxPatternLength, minPatternLength,
       0, 0, maxLocalProjDBSize)
   }
 
   private[fpm] def genFreqPatterns(
                                     data: RDD[Array[Int]],
+                                    isDataAMultiItemDataset: Boolean,
                                     freqItems: Array[(Int, Long)],
                                     minCount: Long,
                                     maxPatternLength: Int,
@@ -362,7 +369,9 @@ object PrefixSpan extends Logging {
       logWarning("Input data is not cached.")
     }
 
-    val postfixes = data.map(items => new Postfix(items))
+    val postfixes: RDD[Sequence] =
+      if (isDataAMultiItemDataset) data.map(items => new Postfix(items))
+      else data.map(items => new PostfixSingleItem(items))
 
     // Local frequent patterns (prefixes) and their counts.
     val localFreqPatterns = mutable.ArrayBuffer.empty[(Array[Int], Long)]
@@ -474,34 +483,30 @@ object PrefixSpan extends Logging {
           (prefix.id, postfix.project(prefix).compressed)
         }.filter(_._2.nonEmpty)
       }.groupByKey().flatMap { case (id, projPostfixes) =>
-        // Init variables
         val prefix = bcSmallPrefixes.value(id)
         val newMaxPatternLength =
           if (maxPatternLength == 0) 0
           else maxPatternLength - prefix.length
         val newMinPatternLength = minPatternLength - prefix.length
-        // Clean sequences
-        val cleaningResult = cleanSequences(projPostfixes, prefix, minCount)
+        val spaceRemainingInCurrentItem = maxItemPerItemSet -
+          (prefix.items.length - prefix.items.lastIndexOf(0) - 1)
 
         // TODO: We collect projected postfixes into memory. We should also compare the performance
         // TODO: of keeping them on shuffle files.
-        // Search
-        if (cleaningResult._2) {
-          // PPIC
-          val localPrefixSpan = new PPICRunner(minCount, newMinPatternLength, newMaxPatternLength)
-
-          localPrefixSpan.run(cleaningResult._1).map { case (pattern, count) =>
-            (prefix.items ++ pattern, count)
+        if (isDataAMultiItemDataset) {
+          // Spark
+          val localPrefixSpan = new LocalPrefixSpan(minCount, newMinPatternLength,
+            newMaxPatternLength, maxItemPerItemSet, spaceRemainingInCurrentItem)
+          localPrefixSpan.run(projPostfixes.toArray).map {
+            case (pattern, count) => (prefix.items ++ pattern, count)
           }
         }
         else {
-          // Spark
-          val spaceRemainingInCurrentItem = maxItemPerItemSet - (prefix.items.length - prefix.items.lastIndexOf(0) - 1)
-          val localPrefixSpan = new LocalPrefixSpan(minCount, newMinPatternLength,
-            newMaxPatternLength, maxItemPerItemSet, spaceRemainingInCurrentItem)
-
-          localPrefixSpan.run(cleaningResult._1).map { case (pattern, count) =>
-            (prefix.items ++ pattern, count)
+          // PPIC
+          val localPrefixSpan = new PPICRunner(minCount, newMinPatternLength,
+            newMaxPatternLength)
+          localPrefixSpan.run(projPostfixes.toArray).map {
+            case (pattern, count) => (prefix.items ++ pattern, count)
           }
         }
       }
@@ -509,115 +514,13 @@ object PrefixSpan extends Logging {
       freqPatterns = freqPatterns ++ distributedFreqPattern
     }
 
+    // Return frequent patterns after filtering small ones
+    // Check must be here, since we need to check pattern obtained outside of local exec too !
+    /*
+    if (minPatternLength == 1) freqPatterns
+    else freqPatterns.filter {case (x, _) => x.count(_ == 0) > minPatternLength}
+    */
     freqPatterns
-  }
-
-  private[fpm] def cleanSequences(
-                                   postfixes: Iterable[Postfix],
-                                   prefix: Prefix,
-                                   minSupport: Long): (Array[Postfix], Boolean) = {
-
-    // Init
-    // Map to collect item frequency
-    val frequentItems = collection.mutable.Map[Int, Long]()
-    // Map to collect item frequency in a sequence
-    val itemSupportedByThisSequence = collection.mutable.Map[Int, Boolean]()
-    // Variable to hold whether we can use PPIC
-    var canUsePPIC = true
-
-    // Find frequent items
-    for (postfix <- postfixes) {
-
-      var lastItemWasZero =
-        if (prefix.items.length >= 2) prefix.items(prefix.items.length - 2) == 0
-        else false
-      // Find items in current sequence
-      for (i <- Range(0, postfix.items.length)) {
-        val x = postfix.items(i)
-        if (x != 0) {
-          if (!lastItemWasZero) canUsePPIC = false
-          lastItemWasZero = false
-          itemSupportedByThisSequence.put(x, true)
-        }
-        else lastItemWasZero = true
-      }
-      // Store them for the next sequence
-      itemSupportedByThisSequence.keys.foreach(x =>
-        frequentItems.update(x, frequentItems.getOrElse(x, 0L) + 1)
-      )
-      // Clean for next iter
-      itemSupportedByThisSequence.clear()
-    }
-
-    if (canUsePPIC) {
-      return (postfixes.toArray, true)
-    }
-    canUsePPIC = true
-
-    // Clean sequences
-    var lenSeqMax = 0
-    val cleanedSequences = mutable.ArrayBuilder.make[Postfix]
-    for (postfix <- postfixes) {
-      // Init
-      var lastItemAdded = 0
-      var partialProjectionAddedSinceLastZero = false
-      val curSeq = mutable.ArrayBuilder.make[Int]
-      val newPartialStarts = scala.collection.mutable.ArrayBuffer.empty[Int]
-      var numberOfItemPerItemSetCounter = 0
-      // Change sequence
-      // Special case for first item, which must always be kept
-      if (postfix.items.length > 0) {
-        curSeq += postfix.items(0) // Always take first item (whether 0 or not, supported or not)
-        if(postfix.items(0) != 0) {
-          numberOfItemPerItemSetCounter += 1
-        }
-        lastItemAdded += 1
-        // Correct partial start
-        if (postfix.partialStarts.contains(0)) {
-          newPartialStarts.append(0)
-          partialProjectionAddedSinceLastZero = true
-        }
-      }
-      // Iter for all other items
-      for (i <- Range(1, postfix.items.length)) {
-        val item = postfix.items(i)
-        // Add cur item if necessary
-        if (item == 0) {
-          if (numberOfItemPerItemSetCounter > 0) {
-            curSeq += item
-            lastItemAdded += 1
-            partialProjectionAddedSinceLastZero = false
-            // Check if we can use PPIC
-            if (numberOfItemPerItemSetCounter > 1) {
-              canUsePPIC = false
-            }
-            numberOfItemPerItemSetCounter = 0
-          }
-          else if (partialProjectionAddedSinceLastZero && newPartialStarts.size > 0) {
-            // If item emptied, remove partial start
-            newPartialStarts.remove(newPartialStarts.length - 1)
-          }
-        }
-        else if (frequentItems.getOrElse(item, 0L) >= minSupport) {
-          curSeq += item
-          lastItemAdded += 1
-          numberOfItemPerItemSetCounter += 1
-        }
-        // Correct partial start
-        if (postfix.partialStarts.contains(i) && lastItemAdded > 0) {
-          partialProjectionAddedSinceLastZero = true
-          newPartialStarts.append(lastItemAdded -1)
-        }
-      }
-      // Add sequence if worthy of being added
-      if (lastItemAdded > 1) { // Must be at least x 0 to be a sequence
-        if (lastItemAdded > lenSeqMax) lenSeqMax = lastItemAdded
-        cleanedSequences += new Postfix(curSeq.result(), 0, newPartialStarts.toArray)
-      }
-    }
-    // Return
-    if (lenSeqMax < 4) canUsePPIC = false // must be x 0 y 0 at least
-    (cleanedSequences.result(), canUsePPIC)
   }
 
   /**
@@ -655,6 +558,19 @@ object PrefixSpan extends Logging {
     val empty: Prefix = new Prefix(Array.empty, 0)
   }
 
+  // Interface to make sure Postfix and PostfixSingleItem are usable by the same program
+  private[fpm] abstract class Sequence extends Serializable{
+    // Make parameters accessible from outside classes
+    def items: Array[Int]
+    // Define methods that need to be implemented
+    def genPrefixItems(shouldSearchInCurItem: Boolean): Iterator[(Int, Long)]
+    def nonEmpty: Boolean
+    def project(prefix: Int): Sequence
+    def project(prefix: Array[Int]): Sequence
+    def project(prefix: Prefix): Sequence
+    def compressed: Sequence
+  }
+
   /**
    * An internal representation of a postfix from some projection.
    * We use one int array to store the items, which might also contains other items from the
@@ -676,10 +592,10 @@ object PrefixSpan extends Logging {
    * @param start the start index of this postfix in items
    * @param partialStarts start indices of possible partial projections, strictly increasing
    */
-  private[fpm] class Postfix(
-                              val items: Array[Int],
+  private[fpm] class Postfix (val items: Array[Int],
                               val start: Int = 0,
-                              val partialStarts: Array[Int] = Array.empty) extends Serializable {
+                              val partialStarts: Array[Int] = Array.empty)
+    extends Sequence {
 
     require(items.last == 0, s"The last item in a postfix must be zero, but got ${items.last}.")
     if (partialStarts.nonEmpty) {
@@ -806,7 +722,7 @@ object PrefixSpan extends Logging {
     /**
      * Projects this postfix with respect to the input prefix.
      */
-    private def project(prefix: Array[Int]): Postfix = {
+    def project(prefix: Array[Int]): Postfix = {
       var partial = true
       var cur = this
       var i = 0
@@ -846,6 +762,102 @@ object PrefixSpan extends Logging {
   }
 
   /**
+   * A Postfix specialized for single-item patterns.
+   * Allowing the use of a shorter representation where delimiter are unnecessary.
+   *
+   * @param items a sequence stored as `Array[Int]` containing this postfix
+   * @param start the start index of this postfix in items
+   */
+  private[fpm] class PostfixSingleItem (val items: Array[Int], val start: Int = 0)
+    extends Sequence {
+
+    /**
+     * Find the items that can be appended to the prefix. Taking the same example above, the prefix
+     * items can be appended to `<1>` is `1`, `2`, and `3`, resulting new prefixes `<11>`, `<12>`,
+     * and `<13>`.
+     *
+     * @return an iterator of prefix item which can be appended to the current prefix.
+     */
+    def genPrefixItems(shouldSearchInCurItem: Boolean): Iterator[(Int, Long)] = {
+      // Init
+      val n1 = items.length
+      val prefixes = mutable.Map.empty[Int, Long]
+      var i = start
+      // Find item that can be appended to this prefix
+      while (i < n1) {
+        val x = items(i)
+        if (!prefixes.contains(x)) {
+          prefixes(x) = n1 - i
+        }
+        i += 1
+      }
+      prefixes.toIterator
+    }
+
+    /** Tests whether this postfix is non-empty. */
+    def nonEmpty: Boolean = items.length > start
+
+    /**
+     * Projects this postfix with respect to the input prefix item.
+     * @param prefix prefix item. If prefix is positive, we match items in any full itemset; if it
+     *               is negative, we do partial projections.
+     * @return the projected postfix
+     */
+    def project(prefix: Int): PostfixSingleItem = {
+      // Init
+      require(prefix > 0)
+      val n1 = items.length
+      var matched = false
+
+      // Search for items in full itemsets.
+      // Though the items are ordered in each itemsets, they should be small in practice.
+      // So a sequential scan is sufficient here, compared to bisection search.
+      val target = prefix
+      var i = start
+      while (i < n1 && !matched) {
+        val x = items(i)
+        if (x == target) {
+          matched = true
+        }
+        i += 1
+      }
+      new PostfixSingleItem(items, i)
+    }
+
+    /**
+     * Projects this postfix with respect to the input prefix.
+     */
+    def project(prefix: Array[Int]): PostfixSingleItem = {
+
+      var cur = this
+      var i = 0
+      val np = prefix.length
+      while (i < np && cur.nonEmpty) {
+        val x = prefix(i)
+        if (x != 0) cur = cur.project(x)
+        i += 1
+      }
+      cur
+    }
+
+    /**
+     * Projects this postfix with respect to the input prefix.
+     */
+    def project(prefix: Prefix): PostfixSingleItem = project(prefix.items)
+
+    /**
+     * Returns the same sequence with compressed storage if possible.
+     */
+    def compressed: PostfixSingleItem = {
+      if (start > 0) {
+        new PostfixSingleItem(items.slice(start, items.length), 0)
+      } else {
+        this
+      }
+    }
+  }
+
+  /**
    * Represents a frequent sequence.
    * @param sequence a sequence of itemsets stored as an Array of Arrays
    * @param freq frequency
@@ -870,7 +882,7 @@ object PrefixSpan extends Logging {
  */
 @Since("1.5.0")
 class PrefixSpanModel[Item] @Since("1.5.0") (
-   @Since("1.5.0") val freqSequences: RDD[PrefixSpan.FreqSequence[Item]])
+  @Since("1.5.0") val freqSequences: RDD[PrefixSpan.FreqSequence[Item]])
   extends Saveable with Serializable {
 
   /**

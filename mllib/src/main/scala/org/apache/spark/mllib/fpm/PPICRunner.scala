@@ -24,7 +24,8 @@ import oscar.cp.core._
 import oscar.cp.core.CPOutcome._
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.mllib.fpm.PrefixSpan.Postfix
+import org.apache.spark.mllib.fpm.PrefixSpan.Sequence
+
 
 /**
  * Calculate all patterns of a projected database in local mode.
@@ -56,26 +57,25 @@ private[fpm] class PPICRunner(val minSup: Long,
   var nbSequences = 0
 
   /**
-   * This function find the frequency of each item in the postfixes.
-   * Storing them in the postfixSupport map, so that un-frequent
-   * items can be cleaned later.
-   *
-   * It also check whether the input is valid or not,
-   * throwing an IllegalArgumentException if it isn't
-   *
-   * @param postfixes
-   * @return The inputed postfixes
-   */
-  def findFrequentItems(postfixes: Array[Postfix]): Unit = {
+    * This function find the frequency of each item in the postfixes.
+    * Storing them in the postfixSupport map, so that un-frequent
+    * items can be cleaned later.
+    *
+    * It also check whether the input is valid or not,
+    * throwing an IllegalArgumentException if it isn't
+    *
+    * @param postfixes
+    * @return The inputed postfixes
+    */
+  def findFrequentItems(postfixes: Array[Sequence]): Unit = {
 
     supportedOriginalItem = collection.mutable.Map[Int, Int]()
     val itemSupportedByThisSequence = collection.mutable.Map[Int, Boolean]()
     var numberOfItemPerItemSetCounter = 0
 
     for (postfix <- postfixes) {
-      // Find frequent items in the sequence (/!\ skip first item /!\)
-      for (i <- Range(1, postfix.items.length)) {
-        val x = postfix.items(i)
+      // Find frequent items in the sequence
+      for (x <- postfix.items) {
         if (x != epsilon) {
           // And item to the supported items
           if (!itemSupportedByThisSequence.contains(x)) {
@@ -102,18 +102,18 @@ private[fpm] class PPICRunner(val minSup: Long,
       numberOfItemPerItemSetCounter = 0
     }
     // Filter item to keep only frequent ones
-    supportedOriginalItem = supportedOriginalItem.filter(kv => kv._2 >= minSup)
+    supportedOriginalItem.filter(kv => kv._2 >= minSup)
   }
 
   /**
-   * Adds an entry to the translation map.
-   *
-   * @param value : An item supported by the sequences
-   * @return the new representation of the old value, which
-   *         will be used as a substitute for the actual
-   *         value in the algorithm.
-   *         (The new reprensentation is an Int > 0)
-   */
+    * Adds an entry to the translation map.
+    *
+    * @param value : An item supported by the sequences
+    * @return the new representation of the old value, which
+    *         will be used as a substitute for the actual
+    *         value in the algorithm.
+    *         (The new reprensentation is an Int > 0)
+    */
   def updateTranslationMap(value: Int): Int = {
 
     // Add new value in reverse map
@@ -126,37 +126,31 @@ private[fpm] class PPICRunner(val minSup: Long,
   }
 
   /**
-   * Clean a sequence to remove un-frequent item
-   * (0 being un-frequent by default). Items are
-   * also renamed to be conveniently used with arrays
-   *
-   * Example :
-   * 0 89 0 104 0 104 0 72
-   * 0 89 0 104
-   *
-   * Becomes :
-   * 1 2 2
-   * 1 2
-   *
-   * @param postfix : A sequence
-   * @return The sequence cleaned from un-frequent items
-   */
-  def preProcessArrayToSDB(postfix: Postfix): Option[Array[Int]] = {
+    * Clean a sequence to remove un-frequent item
+    * (0 being un-frequent by default). Items are
+    * also renamed to be conveniently used with arrays
+    *
+    * Example :
+    * 0 89 0 104 0 104 0 72
+    * 0 89 0 104
+    *
+    * Becomes :
+    * 1 2 2
+    * 1 2
+    *
+    * @param postfix : A sequence
+    * @return The sequence cleaned from un-frequent items
+    */
+  def preProcessArrayToSDB(postfix: Sequence): Option[Array[Int]] = {
 
     // Init
-    var isFirstItem = true
     val numberOfSupportedItem = supportedOriginalItem.size + 1
     val firstItemPosInSeq = Array.fill(numberOfSupportedItem)(0)
     val lastItemPosInSeq = Array.fill(numberOfSupportedItem)(0)
     var nbElemAdded = 0
     // Filter items to clean sequence
     val cleanedSequence = postfix.items.flatMap(x => {
-      if (isFirstItem) {
-        // Ignore first Item, it's already part of the prefixes
-        isFirstItem = false
-        None
-      }
-      else if (supportedOriginalItem.contains(x)) {
+      if (supportedOriginalItem.contains(x)) {
         // Item supported => Get representation (creating new repr if necessary)
         val trans = translationMap.getOrElseUpdate(x, updateTranslationMap(x))
         // Update last pos found in current sequence for current item
@@ -185,25 +179,25 @@ private[fpm] class PPICRunner(val minSup: Long,
   }
 
   /**
-   * Build a matrix whose cell contain the next last position of an item,
-   * Allowing O(1) jump to the next interesting position and producing
-   * an important speed-up !
-   *
-   * @param lastPosOfItem
-   *
-   * LAST POS SID
-   * 0 3 7 5 6
-   * 0 2 0 3 4
-   *
-   * @return
-   *
-   * LAST POS DB
-   * 3 3 5 5 6 7 0
-   * 2 3 4 0
-   *
-   * /!\ 0 only to indicate ends of seq /!\
-   *
-   */
+    * Build a matrix whose cell contain the next last position of an item,
+    * Allowing O(1) jump to the next interesting position and producing
+    * an important speed-up !
+    *
+    * @param lastPosOfItem
+    *
+    * LAST POS SID
+    * 0 3 7 5 6
+    * 0 2 0 3 4
+    *
+    * @return
+    *
+    * LAST POS DB
+    * 3 3 5 5 6 7 0
+    * 2 3 4 0
+    *
+    * /!\ 0 only to indicate ends of seq /!\
+    *
+    */
   def createSdbPosList(lastPosOfItem : Array[Array[Int]]): Array[Array[Int]] = {
 
     // Build last pos matrix
@@ -216,8 +210,8 @@ private[fpm] class PPICRunner(val minSup: Long,
       var j = 0 // Position in sequence
       // Generate sequence
       val resultLine =
-      if (sortedPosList.isEmpty) Array(0)
-      else Array.ofDim[Int](sortedPosList.last)
+        if (sortedPosList.isEmpty) Array(0)
+        else Array.ofDim[Int](sortedPosList.last)
       while (i < sortedPosList.length) {
         if (j + 1 < sortedPosList(i)) {
           // Add position of next last pos to list
@@ -237,9 +231,9 @@ private[fpm] class PPICRunner(val minSup: Long,
   }
 
   /**
-   * @param supportedItemCounter
-   * @return A Array of constraints
-   */
+    * @param supportedItemCounter
+    * @return A Array of constraints
+    */
   def initCPVariables(supportedItemCounter: Array[Int]): Array[CPIntVar] = {
 
     // Create item List
@@ -269,14 +263,14 @@ private[fpm] class PPICRunner(val minSup: Long,
   }
 
   /**
-   * Find the complete set of frequent sequential patterns in the input sequences.
-   *
-   * @param postfixes: An array of postfixes such that each ItemSet contains at most one item.
-   *                 If this condition is not respected, an exception will be thrown.
-   *
-   * @return frequent patterns
-   */
-  def run(postfixes: Array[Postfix]): Iterator[(Array[Int], Long)] = {
+    * Find the complete set of frequent sequential patterns in the input sequences.
+    *
+    * @param postfixes: An array of postfixes such that each ItemSet contains at most one item.
+    *                 If this condition is not respected, an exception will be thrown.
+    *
+    * @return frequent patterns
+    */
+  def run(postfixes: Array[Sequence]): Iterator[(Array[Int], Long)] = {
 
     // Various init done to avoid null reference)
     // Init translation maps
@@ -461,11 +455,11 @@ class PPIC(val P: Array[CPIntVar],
   private[this] var pruneSuccess = true
 
   /**
-   * Entry in constraint, function for all init
-   *
-   * @param l
-   * @return The outcome of the first propagation and consistency check
-   */
+    * Entry in constraint, function for all init
+    *
+    * @param l
+    * @return The outcome of the first propagation and consistency check
+    */
   final override def setup(l: CPPropagStrength): CPOutcome = {
     if (propagate() == Failure) Failure
     else {
@@ -479,10 +473,10 @@ class PPIC(val P: Array[CPIntVar],
   }
 
   /**
-   * propagate
-   *
-   * @return the outcome i.e. Failure, Success or Suspend
-   */
+    * propagate
+    *
+    * @return the outcome i.e. Failure, Success or Suspend
+    */
   final override def propagate(): CPOutcome = {
     var v = curPosInP.value
 
@@ -509,10 +503,10 @@ class PPIC(val P: Array[CPIntVar],
 
 
   /**
-   * when $P_i = epsilon$, then $P_i+1 = epsilon$
-   *
-   * @param i current position in P
-   */
+    * when $P_i = epsilon$, then $P_i+1 = epsilon$
+    *
+    * @param i current position in P
+    */
   def enforceEpsilonFrom(i: Int): Unit = {
     var j = i
     while (j < lenPatternSeq) {
@@ -522,15 +516,15 @@ class PPIC(val P: Array[CPIntVar],
   }
 
   /**
-   * P[curPosInP.value] has just been bound to "prefix"
-   * all the indices before (< currPosInP) are already bound
-   *
-   * if prefix is not epsilon we can compute next pseudo-projected-database
-   * with projectSDB function
-   *
-   * @param prefix
-   * @return the Boolean is to say if current prefix is a solution or not
-   */
+    * P[curPosInP.value] has just been bound to "prefix"
+    * all the indices before (< currPosInP) are already bound
+    *
+    * if prefix is not epsilon we can compute next pseudo-projected-database
+    * with projectSDB function
+    *
+    * @param prefix
+    * @return the Boolean is to say if current prefix is a solution or not
+    */
   private def filterPrefixProjection(prefix: Int): Boolean = {
     val i = curPosInP.value + 1
     // println("filter prefix "+prefix+" at position "+i)
@@ -561,10 +555,10 @@ class PPIC(val P: Array[CPIntVar],
   val dom = Array.ofDim[Int](nItems)
 
   /**
-   * pruning strategy
-   *
-   * @param i current position in P
-   */
+    * pruning strategy
+    *
+    * @param i current position in P
+    */
   private def prune(i: Int): Unit = {
     val j = i
 
@@ -593,11 +587,11 @@ class PPIC(val P: Array[CPIntVar],
 
 
   /**
-   * Computing of next pseudo projected database
-   *
-   * @param prefix
-   * @return
-   */
+    * Computing of next pseudo projected database
+    *
+    * @param prefix
+    * @return
+    */
   private def projectSDB(prefix: Int): Int = {
     val startInit = psdbStart.value
     val sizeInit = psdbSize.value
