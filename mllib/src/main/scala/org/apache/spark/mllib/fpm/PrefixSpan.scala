@@ -349,7 +349,6 @@ object PrefixSpan extends Logging {
           }
         }
         */
-
         val localPrefixSpan2 = new SparkCPRunner(prefix.items, minCount, 0,
           maxPatternLength - prefix.length, !canUsePPIC)
         localPrefixSpan2.run(projPostfixes.toArray).map { case (pattern, count) =>
