@@ -33,7 +33,7 @@ import org.apache.spark.mllib.fpm.PrefixSpan.Postfix
  * @param minSup minimal support for a frequent pattern
  * @param minPatternLength min pattern length for a frequent pattern
  * @param maxPatternLength max pattern length for a frequent pattern
- * @param isDataMultiItem A boolean value that define whether running the algorithm
+ * @param outPutItemSetPermutation A boolean value that define whether running the algorithm
  *                                 on <(1,2) 3> should output (1,2) 3; 1 3; 2 3 or just the
  *                                 last two ...
  */
@@ -41,7 +41,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
                               val minSup: Long,
                               val minPatternLength: Int,
                               val maxPatternLength: Int,
-                              val isDataMultiItem: Boolean)
+                              val outPutItemSetPermutation: Boolean)
   extends CPModel with App with Logging with Serializable{
 
   // Define separator
@@ -77,7 +77,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
       var firstZeroNotEncountered = true
 
       postfix.items.foreach(x => {
-        if (!isDataMultiItem && firstZeroNotEncountered) {
+        if (!outPutItemSetPermutation && firstZeroNotEncountered) {
           if (x == separator) firstZeroNotEncountered = false
         }
         else itemSupportedByThisSequence.update(x, 1)
@@ -101,7 +101,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
       var pos = postfix.items.length - 1
       var addedSomethingElseThanZero = false
       // Start position of the sequence, allow removal of first/ useless item
-      val startPos = if (isDataMultiItem) 1
+      val startPos = if (outPutItemSetPermutation) 1
                      else postfix.items.indexOf(separator)
 
       // We build the sequence in reverse
@@ -194,12 +194,12 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
     // INIT sdb
     val sdb = preProcessPostfixes(postfixes)
     // IF we only have epsilon and separator, no need to search
-    if(sdb.length < minSup) return Iterator()
+    if(sdb.length < minSup) return Iterator((Array(0), postfixes.length.toLong))
 
     val itemSet = itemSupportCounter.keySet
 
     // Init CPvariables
-    val CPVariables = initCPVariables(maxPatternLength, itemSet, isDataMultiItem)
+    val CPVariables = initCPVariables(maxPatternLength, itemSet, outPutItemSetPermutation)
 
     // Setup max pattern length
     val amongItem = (itemSet -- Set(separator)).toSet
@@ -207,7 +207,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
       add(atMost(maxPatternLength, CPVariables, amongItem))
     }
 
-    val lastPrefixItemElems = if (isDataMultiItem) getLastItemFromPrefix()
+    val lastPrefixItemElems = if (outPutItemSetPermutation) getLastItemFromPrefix()
                               else Array[Int]()
 
     // PRINT
@@ -237,8 +237,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
 
     // RUN
     val solutions = scala.collection.mutable.ArrayBuffer.empty[(Array[Int], Long)]
-    val c = new SparkCPOptimised(CPVariables, sdb, lastPrefixItemElems, minSup,
-      collection.mutable.Map() ++ itemSupportCounter.mapValues(x => new ReversibleInt(solver, x)))
+    val c = new SparkCPOptimised(CPVariables, sdb, lastPrefixItemElems, minSup)
     add(c)
 
     this.solver.onSolution {
@@ -259,8 +258,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
 class SparkCPOptimised(val P: Array[CPIntVar],
               val SDB: Array[scala.collection.mutable.Map[Int, ReversibleArrayStack[Int]]],
               val prefixOfLastItem: Array[Int],
-              val minsup : Long,
-              val supportMap: collection.mutable.Map[Int, ReversibleInt])
+              val minsup : Long)
   extends Constraint(P(0).store, "SPARK - CP") {
 
   // Define separator
@@ -272,6 +270,9 @@ class SparkCPOptimised(val P: Array[CPIntVar],
 
   // current position in P $P_i = P[curPosInP.value]$
   private[this] val curPosInP = new ReversibleInt(s, 0)
+
+  // Map containing unsupported elements
+  private[this] val supportMap = scala.collection.mutable.Map.empty[Int, Int]
 
   private[this] val itemSupportedByThisSequence = collection.mutable.Map[Int, Int]()
   // Array with start position in each sequence
@@ -351,13 +352,16 @@ class SparkCPOptimised(val P: Array[CPIntVar],
       // Clean next V
       if(v < P.length - 1) {
         // Remove unsupported item in next V
-        for (value <- P(v + 1)) {
-          if (value != separator &&
-            value != epsilon &&
-            supportMap.getOrElse(value, new ReversibleInt(s, 0)).value < minsup) {
+        if (!supportMap.isEmpty) {
+          for (value <- P(v + 1)) {
+            if (value != separator &&
+              value != epsilon &&
+              supportMap.getOrElse(value, 0) < minsup) {
 
-            if (P(v + 1).removeValue(value) == Failure) return Failure
+              if (P(v + 1).removeValue(value) == Failure) return Failure
+            }
           }
+          supportMap.clear()
         }
         // IF v != separator, v+1 != epsilon
         if (P(v).value != separator) {
@@ -415,21 +419,18 @@ class SparkCPOptimised(val P: Array[CPIntVar],
     // Init var
     curPrefixSupport = 0
     val soughtItem = P(v).value
-    val nbSupportForSoughtItem = supportMap.getOrElse(soughtItem, new ReversibleInt(s, 0)).value
-    supportMap.values.foreach(x => x.setValue(0)) // Clear map
 
     // Check strictly increasing value in building item (Usefull since they are not translated)
     if (soughtItem != separator && soughtItem < getElemOfP(v-1)) return false
 
     // Find index to write new sequences + keep track of number of sequence added
     var writeIndex = psdbSize.value
-    var nbAdded = 0
 
     // Init stat index for search in psdb
     var sequenceIndexInPSDB = psdbStart.value
 
     // Start search
-    while (sequenceIndexInPSDB < psdbSize.value && nbAdded < nbSupportForSoughtItem) {
+    while (sequenceIndexInPSDB < psdbSize.value) {
       // Init sequence index
       val sequenceIndex = psdb(sequenceIndexInPSDB)
 
@@ -438,42 +439,41 @@ class SparkCPOptimised(val P: Array[CPIntVar],
       // Search cur sequence
       val i = index.value
       val curSeq = SDB(sequenceIndex)
-      var projectedSuccessfully = false;
 
       // Find start of next item
       val separatorPos = curSeq.getOrElse(separator, new ReversibleArrayStack[Int](s))
       while (!separatorPos.isEmpty && separatorPos.top < i) separatorPos.pop()
+
       if (separatorPos.isEmpty) {
         // Do nothing, all hope is lost for this sequence
-        // If separator empty => unsupported
-        // because every seq ends with a 0
       }
       else if (soughtItem == separator) {
         // If separator empty => unsupported
         // Else supported, move index of sequence
         index.setValue(separatorPos.pop() + 1)
         curPrefixSupport += 1
-        projectedSuccessfully = true
+
+        if (writeIndex >= innerTrailSize) growInnerTrail()
+        psdb(writeIndex) = sequenceIndex
+        writeIndex += 1
       }
       else {
-        // Find next sought item ! :
-        // if sought == in current item => Success
+        // Find next sought item, if in current item Success
         // Else, search all items until found or unsupported
         val soughtPos = curSeq.getOrElse(soughtItem, new ReversibleArrayStack[Int](s))
         while (!soughtPos.isEmpty && soughtPos.top < i) soughtPos.pop()
 
-        if (soughtPos.isEmpty) {
-          // IF soughtPos doesn't exist, kill sequence for future iter
-          while (separatorPos.size > 1) separatorPos.pop()
-          index.setValue(separatorPos.pop() + 1)
-        }
-        else {
+        // If no pos, don't even look for it, it's unsupported
+        if (! soughtPos.isEmpty) {
           // Else, search all items until found or unsupported
           if (soughtPos.top < separatorPos.top) {
-            // Item in current item => supported
+
             index.setValue(soughtPos.pop() + 1)
             curPrefixSupport += 1
-            projectedSuccessfully = true
+
+            if (writeIndex >= innerTrailSize) growInnerTrail()
+            psdb(writeIndex) = sequenceIndex
+            writeIndex += 1
           }
           else {
             // Search from that item on, nothing before anyway
@@ -487,10 +487,13 @@ class SparkCPOptimised(val P: Array[CPIntVar],
               // No prefix to search for, just put pos to next item found
               index.setValue(soughtPos.pop() + 1)
               curPrefixSupport += 1
-              projectedSuccessfully = true
+
+              if (writeIndex >= innerTrailSize) growInnerTrail()
+              psdb(writeIndex) = sequenceIndex
+              writeIndex += 1
             }
             else {
-              // Find least present item from current prefix in comming sequences
+              // Find least present item in comming sequence
               // Iter on that item, to shorten computation time
               var minSize = soughtPos.size
               var minSizePos = v - posInP
@@ -556,38 +559,34 @@ class SparkCPOptimised(val P: Array[CPIntVar],
                 // Prefix supported, last pos cannot be empty, so we simply take what's in it
                 index.setValue(prefixSearcherArray(prefixSearcherArray.length - 1).pop() + 1)
                 curPrefixSupport += 1
-                projectedSuccessfully = true
+
+                if (writeIndex >= innerTrailSize) growInnerTrail()
+                psdb(writeIndex) = sequenceIndex
+                writeIndex += 1
               }
               else {
-                // IF not found, kill sequence
+                // IF not foung, kill sequence
                 while (separatorPos.size > 1) separatorPos.pop()
                 index.setValue(separatorPos.pop() + 1)
               }
             }
           }
         }
+        else {
+          // IF soughtPos doesn't exist, kill sequence for future iter
+          while (separatorPos.size > 1) separatorPos.pop()
+          index.setValue(separatorPos.pop() + 1)
+        }
       }
       // Recalculate support map
-      if (projectedSuccessfully && !separatorPos.isEmpty) {
-        // Add to supported sequences in psdb
-        if (writeIndex >= innerTrailSize) growInnerTrail()
-        psdb(writeIndex) = sequenceIndex
-        writeIndex += 1
-        nbAdded += 1
-        // Find supported items
-        if (v + 1 < P.length) {
-          for (value <- P(v + 1)) {
-            // Get item
-            val stack = curSeq.getOrElse(value, new ReversibleArrayStack[Int](s))
+      if (soughtItem == separator && !separatorPos.isEmpty) {
+        curSeq.foreach{
+          case (key: Int, stack: ReversibleArrayStack[Int]) =>
             // Clean uneeded elements
             val i = index.value
-            while (!stack.isEmpty && stack.top < i) stack.pop()
+            while (!stack.isEmpty && stack.top < index.value) stack.pop()
             // Add to support map if necessary
-            if (!stack.isEmpty) {
-              val toAdd = supportMap.getOrElseUpdate(value, new ReversibleInt(s, 0))
-              toAdd.incr()
-            }
-          }
+            if (!stack.isEmpty) supportMap.update(key, supportMap.getOrElse(key, 0) + 1)
         }
       }
       sequenceIndexInPSDB += 1
@@ -595,9 +594,6 @@ class SparkCPOptimised(val P: Array[CPIntVar],
     // Change psdb indexes for next iter
     psdbStart.setValue(psdbSize.value)
     psdbSize.setValue(writeIndex)
-    // Item support for separator
-    val sepSup = supportMap.getOrElseUpdate(separator, new ReversibleInt(s, 0))
-    sepSup.setValue(nbAdded)
     // Return result
     curPrefixSupport >= minsup
   }
