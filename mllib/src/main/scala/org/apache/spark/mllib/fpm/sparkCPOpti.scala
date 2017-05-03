@@ -576,16 +576,96 @@ class SparkCPOptimised(val P: Array[CPIntVar],
         nbAdded += 1
         // Find supported items
         if (v + 1 < P.length) {
-          for (value <- P(v + 1)) {
-            // Get item
-            val stack = curSeq.getOrElse(value, new ReversibleArrayStack[Int](s))
-            // Clean uneeded elements
-            val i = index.value
-            while (!stack.isEmpty && stack.top < i) stack.pop()
-            // Add to support map if necessary
-            if (!stack.isEmpty) {
-              val toAdd = supportMap.getOrElseUpdate(value, new ReversibleInt(s, 0))
-              toAdd.incr()
+          if (soughtItem == separator) {
+            for (value <- P(v + 1)) {
+              // Get item
+              val stack = curSeq.getOrElse(value, new ReversibleArrayStack[Int](s))
+              // Clean uneeded elements
+              val i = index.value
+              while (!stack.isEmpty && stack.top < i) stack.pop()
+              // Add to support map if necessary
+              if (!stack.isEmpty) {
+                val toAdd = supportMap.getOrElseUpdate(value, new ReversibleInt(s, 0))
+                toAdd.incr()
+              }
+            }
+          }
+          else {
+            // Only item extending itemset containing all item of current itemSet can be solution
+            // Find current prefix boundaries
+            var posInP = v
+            while (posInP >= 0 && P(posInP).value != separator) posInP -= 1
+            if (posInP == -1) posInP = -prefixOfLastItem.length
+            else posInP += 1
+
+            // Find all item to project
+            val prefixSearcherArray = Array.fill[ReversibleArrayStack[Int]](v - posInP + 1) {
+              // Find itemMap
+              val item = getElemOfP(posInP)
+              val itemMap = curSeq.getOrElse(getElemOfP(posInP), new ReversibleArrayStack[Int](s))
+              // Prepare next item
+              posInP += 1
+              // Return
+              itemMap
+            }
+
+            for (value <- P(v + 1)) {
+              if (value >= soughtItem) {
+                // If value lower than sought Item, no need to even search. Will never be in sol.
+                // Get item
+                val nextItem = curSeq.getOrElse(value, new ReversibleArrayStack[Int](s))
+                val i = index.value
+                while (!nextItem.isEmpty && nextItem.top < i) nextItem.pop()
+                // Check if item is in cur item
+                if (nextItem.isEmpty) {
+                  // DO nothing, item will never be supported
+                }
+                else if (nextItem.top < separatorPos.top) {
+                  val toAdd = supportMap.getOrElseUpdate(value, new ReversibleInt(s, 0))
+                  toAdd.incr()
+                }
+                else {
+                  // Check if present in further items
+                  var prefixIndex = -1
+                  var posInSeq = separatorPos.top + 1 // Pos from which we start searching
+                  var posOfNextSep = 0
+                  var continue = true // Stay true while an item doesn't become empty
+                  while (prefixIndex < prefixSearcherArray.length && continue) {
+                    // Project all value of curent itemSet to find another supporting one
+                    var foundNextPosOfItem = false
+                    var i = 0
+                    if (prefixIndex == -1) {
+                      // Update pos of next sep, so that we can search before it
+                      while (i < separatorPos.size && !foundNextPosOfItem) {
+                        if (separatorPos(i) >= posInSeq) {
+                          posOfNextSep = separatorPos(i)
+                          foundNextPosOfItem = true
+                        }
+                        i+=1
+                      }
+                      if (!foundNextPosOfItem) continue = false
+                    }
+                    else {
+                      // Find next pos of that item
+                      while (i < prefixSearcherArray(prefixIndex).size && !foundNextPosOfItem) {
+                        if (prefixSearcherArray(prefixIndex)(i) >= posInSeq) {
+                          posInSeq = prefixSearcherArray(prefixIndex)(i) + 1
+                          foundNextPosOfItem = true
+                        }
+                        i+=1
+                      }
+                      // Check if still in cur item
+                      if (!foundNextPosOfItem) continue = false
+                      else if (posInSeq >= posOfNextSep) prefixIndex = -2 // need to find new next
+                    }
+                    prefixIndex+=1
+                  }
+                  if (continue) {
+                    val toAdd = supportMap.getOrElseUpdate(value, new ReversibleInt(s, 0))
+                    toAdd.incr()
+                  }
+                }
+              }
             }
           }
         }
