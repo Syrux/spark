@@ -194,7 +194,7 @@ private[fpm] class SparkCPRunner(val prefix: Array[Int],
     // INIT sdb
     val sdb = preProcessPostfixes(postfixes)
     // IF we only have epsilon and separator, no need to search
-    if(sdb.length < minSup) return Iterator((Array(0), postfixes.length.toLong))
+    if(sdb.length < minSup) return Iterator()
 
     val itemSet = itemSupportCounter.keySet
 
