@@ -125,7 +125,7 @@ private[fpm] class MultiItemPPICRunner( val prefix: Array[Int],
     // Remove unsupported item
     for (postfix <- postfixes) {
       // Create SDB postfix
-      var partialAddedSinceLastZero = false
+      var partialAddedSinceLastZero = 0
       var nbItemAdded = 0
       var nbItemAddedSinceLastZero = 1 // Start at one so that first 0 always in
                                        // No problem for singleItem sequences
@@ -138,15 +138,16 @@ private[fpm] class MultiItemPPICRunner( val prefix: Array[Int],
         val x = postfix.items(i)
         if (x == 0) {
           if (nbItemAddedSinceLastZero > 0) {
-            partialAddedSinceLastZero = false
+            partialAddedSinceLastZero = 0
             if (nbItemAddedSinceLastZero > 1) shouldUseSingleItemPPIC = false
             nbItemAddedSinceLastZero = 0
             curPostfix += x
             nbItemAdded += 1
           }
-          else if (partialAddedSinceLastZero && partialProjections.size > 0) {
-            // If item emptied, remove partial start
+          else while (partialAddedSinceLastZero > 0) {
+            // If item emptied, remove partial start for that item
             partialProjections.pop()
+            partialAddedSinceLastZero -= 1
           }
         }
         else if (itemSupportCounter.getOrElse(x, 0) >= minSup) {
@@ -162,9 +163,9 @@ private[fpm] class MultiItemPPICRunner( val prefix: Array[Int],
           }
         }
         // Correct partial start
-        if (postfix.partialStarts.contains(i) && nbItemAdded > 0) {
-          partialProjections.push(nbItemAdded - 1)
-          partialAddedSinceLastZero = true
+        if (postfix.partialStarts.contains(i)) {
+          partialProjections.push(math.max(nbItemAdded - 1, 0)) // max important to avoid -1
+          partialAddedSinceLastZero +=1
         }
       }
       // If sequence is useful
@@ -617,7 +618,7 @@ class MultiItemPPIC(val P: Array[CPIntVar],
     var sequenceIndexInPSDB = psdbStart.value
 
     // Start search
-    while (sequenceIndexInPSDB < psdbSize.value && nbAdded < nbSupportForSoughtItem) {
+    while (sequenceIndexInPSDB < psdbSize.value) {
       // Init sequence index
       val sequenceIndex = psdb(sequenceIndexInPSDB)
       // println(sequenceIndexInPSDB + "  |  " + sequenceIndex)
@@ -732,7 +733,7 @@ class MultiItemPPIC(val P: Array[CPIntVar],
       }
 
       // Update start position in sequence
-      if (i >= curSeq.length) {
+      if (i > curSeq.length) {
         index.setValue(i)
       }
       else {
